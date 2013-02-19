@@ -1,4 +1,4 @@
-package local.techsy730;
+package local.techsy730.util.sort;
 
 import java.io.IOException;
 import java.util.Deque;
@@ -20,13 +20,16 @@ public final class MSDStringSorter
     // XXX Empirically determine a good estimate for these constants, based on common
     // usage cases
     private static final int MAX_INSERTION_SORT = 16;
-    private static final int MAX_ARRAYS_SORT = 80;
+    //Set to MAX_INSERTION_SORT to effectively disable this optimization
+    private static final int MAX_ARRAYS_SORT = 30;
+    
+    private static final int MAX_INSERTION_SORT_2 = MAX_INSERTION_SORT * 2;
     
     private static final int MIN_BLOCK_LEN_TO_MERGE = 3;
 
     // For these two values, SMALLER numbers mean MORE hesistant to trigger the optimization
-    private static final int MIN_REMAINING_BEFORE_MERGING_RANGES = 30;
-    private static final int MIN_REMAINING_BEFORE_FULL_ARRAYS_SORT = 15;
+    private static final int MAX_REMAINING_BEFORE_MERGING_RANGES = 25;
+    private static final int MAX_REMAINING_BEFORE_FULL_ARRAYS_SORT = 15;
 
     public static final void sort(String[] arr)
     {
@@ -51,29 +54,35 @@ public final class MSDStringSorter
         // Not using <> syntactic shortcut to maintain source compatibility with java 1.6
         Deque<SortState> stack = new java.util.ArrayDeque<SortState>(Math.max(16, (int)(Math.sqrt(toIndex - fromIndex))));
         stack.addFirst(new SortState(fromIndex, toIndex, 0, Integer.MAX_VALUE));
+        final int[] baseMaxIndexHolder = new int[1];
         while(!stack.isEmpty())
         {
-            processPart(arr, wc, stack, stack.pollFirst());
+            processPart(arr, wc, stack, stack.pollFirst(), baseMaxIndexHolder);
             // "Recurse"
         }
         return; // This redundant return is only so we can set a breakpoint here.
     }
 
     private static void processPart(String[] arr, String[] wc, Deque<SortState> stack,
-        SortState currentState)
+        SortState currentState, final int[] maxIndexHolder)
     {
         final int start = currentState.start;
         final int end = currentState.end;
         final int index = currentState.index;
-        final int maxIndex = currentState.maxIndex;
+        int maxIndex = currentState.maxIndex;
         // If there are no characters in this block, just return now
         if(maxIndex == 0) return;
 
         assert index <= maxIndex : index + " > max of " + maxIndex;
-
+        boolean needMaxIndexUpdate = maxIndex == Integer.MAX_VALUE || end - start <= MAX_INSERTION_SORT_2;
         // First, sort on the current character
-        int[] buckets = doSortOnPart(arr, wc, start, end, index, maxIndex);
+        int[] buckets = doSortOnPart(arr, wc, start, end, index, maxIndex, needMaxIndexUpdate, maxIndexHolder);
         if(buckets == FULLY_SORTED) return;
+        if(maxIndexHolder[0] != -1)
+        {
+            maxIndex = maxIndexHolder[0];
+            needMaxIndexUpdate = end - start <= MAX_INSERTION_SORT_2;
+        }
 
         // Now, find sub-blocks of the same characters
 
@@ -89,13 +98,12 @@ public final class MSDStringSorter
                     //All of them were the null char, which is a sign that all of them are past the string size
                     return;
                 }
-                int maxIndexBlock = buckets.length == 1 ? buckets[0] : maxIndex;
                 // Common case, all the characters at this level were the same, just
                 // immediately move on
-                int sharedPrefixLen = findSharedPrefixLen(arr, start, end, index + 1, maxIndexBlock);
+                int sharedPrefixLen = findSharedPrefixLen(arr, start, end, index + 1, maxIndex);
                 // Shared prefix length might be zero if all of them are them are shorter
                 // than the current index
-                stack.addFirst(currentState.setState(start, end, index + sharedPrefixLen + 1, maxIndexBlock));
+                stack.addFirst(currentState.setState(start, end, index + sharedPrefixLen + 1, maxIndex));
             }
             else
             {
@@ -105,7 +113,7 @@ public final class MSDStringSorter
                     splitByCharGroups(arr, stack, start, end, index, maxIndex, curChar, currentState);
                 else
                     splitByCharGroups(arr, stack, start, end, index, maxIndex, buckets, currentState,
-                        maxIndex == Integer.MAX_VALUE || end - start <= MAX_INSERTION_SORT);
+                        needMaxIndexUpdate);
             }
         }
         else
@@ -125,8 +133,8 @@ public final class MSDStringSorter
         // Warning: Whatever range this may be, it MUST be small enough such that merged
         // range WILL fall under a complete sort, not a current index only sort
         final int remainingCharsToProcess = maxIndex - index;
-        final boolean shouldMerge = remainingCharsToProcess < MIN_REMAINING_BEFORE_MERGING_RANGES;
-        final int maxMergedRangeSize = remainingCharsToProcess <= MIN_REMAINING_BEFORE_FULL_ARRAYS_SORT ? MAX_ARRAYS_SORT
+        final boolean shouldMerge = remainingCharsToProcess < MAX_REMAINING_BEFORE_MERGING_RANGES;
+        final int maxMergedRangeSize = remainingCharsToProcess <= MAX_REMAINING_BEFORE_FULL_ARRAYS_SORT ? MAX_ARRAYS_SORT
             : MAX_INSERTION_SORT;
         for(int i = start; i < end; ++i)
         {
@@ -236,21 +244,21 @@ public final class MSDStringSorter
         // Warning: Whatever range this may be, it MUST be small enough such that merged
         // range WILL fall under a complete sort, not a current index only sort
         final int remainingCharsToProcess = maxIndex - index;
-        final boolean shouldMerge = remainingCharsToProcess < MIN_REMAINING_BEFORE_MERGING_RANGES;
-        final int maxMergedRangeSize = remainingCharsToProcess <= MIN_REMAINING_BEFORE_FULL_ARRAYS_SORT ? MAX_ARRAYS_SORT
+        final boolean shouldMerge = remainingCharsToProcess < MAX_REMAINING_BEFORE_MERGING_RANGES;
+        final int maxMergedRangeSize = remainingCharsToProcess <= MAX_REMAINING_BEFORE_FULL_ARRAYS_SORT ? MAX_ARRAYS_SORT
             : MAX_INSERTION_SORT;
         // curChar MUST be the min char seen
         for(int i = 0; i < buckets.length - 1; ++i)
         {
             int maxIndexBlock = -1;
             final int regionStart = buckets[i] + start;
-            final int regionEnd = buckets[i + 1] + start;
             if(charAt(arr[regionStart], 0) == '\0')
             {
                 //Block for null character block, which is a sign that we are at the end of these strings, so just skip this block
                 continue;
             }
-            int newSize = regionEnd - regionStart;
+            final int regionEnd = buckets[i + 1] + start;
+            final int newSize = regionEnd - regionStart;
             // record block
             if(newSize > 1) // Skip sub-blocks of size 1, one of the advantages of MSD sort
             {
@@ -297,7 +305,7 @@ public final class MSDStringSorter
                 else
                 {
                     if(mergeHolder != null) // Can't merge this block, as it is too big,
-                                            // so dump out what we have to far if any
+                                            // so dump out what we have so far if any
                     {
                         stack.addFirst(advanceIndexIfNeeded(mergeHolder, !mergeHasMoreThanOne));
                         mergeHasMoreThanOne = false;
@@ -312,7 +320,7 @@ public final class MSDStringSorter
             }
             else
             {
-                assert newSize > 1; // This is just here for a nice breakpoint
+                assert newSize <= 1; // This is just here for a nice breakpoint
             }
         }
 
@@ -328,12 +336,12 @@ public final class MSDStringSorter
         }
 
         // The for loop may miss one block, the final one. If so, add it now
-        final int newSize = end - buckets[buckets.length - 1];
+        final int regionStart = buckets[buckets.length - 1] + start;
+        final int regionEnd = end;
+        final int newSize = regionEnd - regionStart;
         if(newSize > 1)
         {
             //Just "inline sort" blocks of size 2
-            final int regionStart = buckets[buckets.length - 1] + start;
-            final int regionEnd = end;
             if(newSize == 2)
                 sortTwoItems(arr, regionStart, regionStart + 1, index + 1);
             else
@@ -377,9 +385,10 @@ public final class MSDStringSorter
      * @return
      */
     private static final int[] doSortOnPart(final String[] arr, final String[] wc,
-        final int fromIndex, final int toIndex, final int charIndex, final int maxIndex)
+        final int fromIndex, final int toIndex, final int charIndex, final int maxIndex, boolean tryTrackMaxIndex, int[] maxIndexHolder)
     {
         final int len = toIndex - fromIndex;
+        maxIndexHolder[0] = -1;
         if(len <= 1) return FULLY_SORTED;
         if(len == 2)
         {
@@ -393,7 +402,7 @@ public final class MSDStringSorter
         }
         else if(len <= MAX_ARRAYS_SORT)
         {
-            if(maxIndex - charIndex <= MIN_REMAINING_BEFORE_FULL_ARRAYS_SORT)
+            if(maxIndex - charIndex <= MAX_REMAINING_BEFORE_FULL_ARRAYS_SORT)
             {
                 Arrays.sort(arr, fromIndex, toIndex, new NaturalSubstringComparator(charIndex));
                 return FULLY_SORTED;
@@ -403,7 +412,7 @@ public final class MSDStringSorter
         }
         else
         {
-            return bucketSort(arr, wc, fromIndex, toIndex, charIndex, maxIndex == Integer.MAX_VALUE || len <= MAX_INSERTION_SORT);
+            return bucketSort(arr, wc, fromIndex, toIndex, charIndex, tryTrackMaxIndex, maxIndexHolder);
         }
     }
 
@@ -425,12 +434,17 @@ public final class MSDStringSorter
         // If we want the shared prefix starting past the end, clearly there is no shared
         // prefix starting here
         if(charIndex >= len) return 0;
+        //Eww, O(m^2) algorithm (where m is the number of characters remaining to be processed.
+        //Granted, time spent here cuts down on the m of the next O(m*n) "top level" cycle
+        //(indeed, if this hits the worst case, all characters matching, than this range needs no further processing)
+        //But on average, is this worth it?
         for(int i = charIndex; i < len; ++i)
         {
             char currentChar = toTestAgainst.charAt(i);
             for(int j = fromIndex + 1; j < toIndex; ++j)
             {
-                if(charAt(arr[j], i) != currentChar) return i - charIndex;
+                if(charAt(arr[j], i) != currentChar)
+                    return i - charIndex;
             }
         }
         // If we made it all the way through, the whole string matched
@@ -460,7 +474,7 @@ public final class MSDStringSorter
     }
 
     private static final int[] bucketSort(String[] arr, String[] wc, final int fromIndex, final int toIndex,
-        final int charIndex, boolean trackMaxLen)
+        final int charIndex, boolean trackMaxLen, int[] maxIndexHolder)
     {
         final int len = toIndex - fromIndex;
         // This will grow as needed
@@ -486,6 +500,7 @@ public final class MSDStringSorter
                     cAsInt, 20);
                 ++charCountBuffer[cAsInt];
             }
+            maxIndexHolder[0] = maxSeenSize;
         }
         else
         {
@@ -500,12 +515,13 @@ public final class MSDStringSorter
                     cAsInt, 20);
                 ++charCountBuffer[cAsInt];
             }
+            maxIndexHolder[0] = -1;
         }
 
         if(minCharSeen == maxCharSeen)
         {
             // Only one char seen, that is a sign to just skip this sub-block, and move on
-            return trackMaxLen ? new int[]{maxSeenSize} : INDEX_SORTED_NO_BUCKETS;
+            return INDEX_SORTED_NO_BUCKETS;
         }
 
         // Compute index where each "section" will start
@@ -643,7 +659,8 @@ public final class MSDStringSorter
     // Thanks to how large strings can get, we cannot use recursion. As such, we must
     // maintain our own stack to maintain current state
     // This is the "mini stack frame" containing the data we need for the current
-    // sub-problem
+    // sub-problem.
+    // Mutable to help reduce the number of allocations needed.
     // XXX Yea, allocating these is not as cheap as I was hoping for
     // Some moderate speedup can be had if I am willing to track ranges without having to
     // resort to this
@@ -662,12 +679,18 @@ public final class MSDStringSorter
 
         public SortState(int start, int end, int index, int maxIndex)
         {
-            setState(start, end, index, maxIndex);
+            this.start = start;
+            this.end = end;
+            this.index = index;
+            this.maxIndex = maxIndex;
         }
         
         public SortState(SortState otherState)
         {
-            setState(otherState);
+            this.start = otherState.start;
+            this.end = otherState.end;
+            this.index = otherState.index;
+            this.maxIndex = otherState.maxIndex;
         }
         
         public static final SortState getOrSetState(SortState existing, SortState otherState)
@@ -730,10 +753,11 @@ public final class MSDStringSorter
         }
 
         /**
-         * Attempts to merge two adjacent ranges over the same indexes. Returns null if it cannot.
+         * Attempts to merge two adjacent ranges over the same indexes, returns null if it cannot.
+         * The object will be untouched if the merged could not be done.
          * 
          * @param other
-         * @return
+         * @return this (which is now merged with other), or {@literal null} if it cannot merge.
          */
         public SortState mergeWith(SortState other)
         {
@@ -754,11 +778,11 @@ public final class MSDStringSorter
 
     }
 
-    private static final int NUM_TIMES_WARMUP = 600;
-    private static final int NUM_TIMES_RUN_SORT = 800;
+    private static final int NUM_TIMES_WARMUP = 3000;
+    private static final int NUM_TIMES_RUN_SORT = 50000;
     private static final int MAX_NUM_TO_PRINT = 1000;
 
-    private static final int TIME_TO_PAUSE_AFTER_WARMUP = 2;
+    private static final int TIME_TO_PAUSE_AFTER_WARMUP = 8;
 
     public static void main(String... args) throws IOException, InterruptedException
     {
@@ -772,6 +796,7 @@ public final class MSDStringSorter
         //    .toArray(new String[0]);
         //String[] test = org.apache.commons.io.IOUtils.readLines(MSDStringSorter.class.getResourceAsStream("README")).toArray(new String[0]);
         String[] test = toArrayString(Arrays.class.getDeclaredMethods());
+        java.util.Collections.shuffle(Arrays.asList(test));
         //String[] test = new String[5000];
         //Arrays.fill(test, "");
         System.err.println("Dataset is: " + test.length + " entries long");
