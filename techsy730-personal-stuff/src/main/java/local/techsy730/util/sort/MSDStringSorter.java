@@ -5,8 +5,9 @@ import java.util.Deque;
 import java.util.Arrays;
 
 // TODO DOCUMENTATION!
-// TODO versions of the sort supporting Comparator<Character> and CharComparator
 // TODO benchmark support and comparison with Arrays.sort(Object[])
+// XXX See if something can be done about "midstring" null characters ('\0') without harming performance much
+// TODO Refactor to an instance type thing, which will allow some of the methods to be merged together some due to not having to need so many local variables.
 /**
  * 
  * @author C. Sean Young
@@ -19,18 +20,40 @@ public final class MSDStringSorter
 
     // XXX Empirically determine a good estimate for these constants, based on common
     // usage cases
+    //XXX This should be 16 or so on Java 7, but 7 on Java 6
+    //NOTE Keep in mind that when this triggers, *up to* all of the remaining characters will be looked at for each comparison
+    //Thus, setting this too high negates the advantages of MSD sort.
+    //This number was chosen based on some extremely rough "back of the envelope" theoritcal calculations and verfied loosly
+    //to be decent with very non-rigourous tests.
+    //The advantage is that once a chunk gets sorted by this, that chunk will never have to be looked at again.
     private static final int MAX_INSERTION_SORT = 16;
     //Set to MAX_INSERTION_SORT to effectively disable this optimization
-    private static final int MAX_ARRAYS_SORT = 30;
+    //NOTE Keep in mind, if the Arrays.sort only on the current index is used
+    //then we have to loop through that segment AGAIN to find the next layer of "chunks".
+    //Thus, this needs to be kept somewhat low.
+    private static final int MAX_ARRAYS_SORT = 40;
     
-    private static final int MAX_INSERTION_SORT_2 = MAX_INSERTION_SORT * 2;
+    //This causes a few extra loops to be run, and makes other loops gain extra operations, thus keep it somewhat low
+    //However, the savings from a correctly computed max length can be rather large, so thus you don't need to be too conservative with it.
+    private static final int MAX_UPDATE_MAX_LENGTH = (int)(MAX_ARRAYS_SORT * 1.4);
     
-    private static final int MIN_BLOCK_LEN_TO_MERGE = 3;
+    //Set this to the minimum that there isn't a specific n-way sort method for.
+    private static final int MIN_BLOCK_LEN_TO_MERGE = 4;
 
     // For these two values, SMALLER numbers mean MORE hesistant to trigger the optimization
-    private static final int MAX_REMAINING_BEFORE_MERGING_RANGES = 25;
-    private static final int MAX_REMAINING_BEFORE_FULL_ARRAYS_SORT = 15;
-
+    //Merging is a rather expensive operation, just to save a few method calls. Thus, be conservative with this number. 
+    private static final int MAX_REMAINING_BEFORE_MERGING_RANGES = 12;
+    //Be even more conservative with this number, as not only will it trigger more aggressive merges, but also cause a non-insertion call to
+    //arrays sort to look at all of the remaining characters, which could get expensive.
+    private static final int MAX_REMAINING_BEFORE_FULL_ARRAYS_SORT = 4;
+    
+/*
+    static
+    {
+        assert MAX_INSERTION_SORT <= MAX_ARRAYS_SORT;
+        assert MAX_REMAINING_BEFORE_FULL_ARRAYS_SORT <= MAX_REMAINING_BEFORE_MERGING_RANGES;
+    }
+*/
     public static final void sort(String[] arr)
     {
         sort(arr, 0, arr.length);
@@ -41,7 +64,18 @@ public final class MSDStringSorter
         // TODO We can do much better if we dump to char[] first, and also be willing to
         // have a "working" copy
         if(checkBounds(arr.length, fromIndex, toIndex)) return;
-        if(toIndex - fromIndex <= MAX_ARRAYS_SORT)
+        final int len = toIndex - fromIndex;
+        if(len == 2)
+        {
+            sortTwoItems(arr, fromIndex, fromIndex + 1, 0);
+            return;
+        }
+        if(len == 3)
+        {
+            sortThreeItems(arr, fromIndex, fromIndex + 1, fromIndex + 2, 0);
+            return;
+        }
+        if(len <= MAX_ARRAYS_SORT)
         {
             Arrays.sort(arr, fromIndex, toIndex);
             return;
@@ -52,13 +86,14 @@ public final class MSDStringSorter
         // XXX Empirically determine a good estimate for preallocation, based on common
         // usage cases
         // Not using <> syntactic shortcut to maintain source compatibility with java 1.6
-        Deque<SortState> stack = new java.util.ArrayDeque<SortState>(Math.max(16, (int)(Math.sqrt(toIndex - fromIndex))));
+        Deque<SortState> stack = new java.util.ArrayDeque<SortState>(
+            Math.max(16, (int)Math.sqrt(toIndex - fromIndex)));
         stack.addFirst(new SortState(fromIndex, toIndex, 0, Integer.MAX_VALUE));
         final int[] baseMaxIndexHolder = new int[1];
         while(!stack.isEmpty())
         {
-            processPart(arr, wc, stack, stack.pollFirst(), baseMaxIndexHolder);
             // "Recurse"
+            processPart(arr, wc, stack, stack.pollFirst(), baseMaxIndexHolder);
         }
         return; // This redundant return is only so we can set a breakpoint here.
     }
@@ -74,14 +109,14 @@ public final class MSDStringSorter
         if(maxIndex == 0) return;
 
         assert index <= maxIndex : index + " > max of " + maxIndex;
-        boolean needMaxIndexUpdate = maxIndex == Integer.MAX_VALUE || end - start <= MAX_INSERTION_SORT_2;
+        boolean needMaxIndexUpdate = maxIndex == Integer.MAX_VALUE || end - start <= MAX_UPDATE_MAX_LENGTH;
         // First, sort on the current character
         int[] buckets = doSortOnPart(arr, wc, start, end, index, maxIndex, needMaxIndexUpdate, maxIndexHolder);
         if(buckets == FULLY_SORTED) return;
         if(maxIndexHolder[0] != -1)
         {
             maxIndex = maxIndexHolder[0];
-            needMaxIndexUpdate = end - start <= MAX_INSERTION_SORT_2;
+            needMaxIndexUpdate = end - start < MAX_UPDATE_MAX_LENGTH;
         }
 
         // Now, find sub-blocks of the same characters
@@ -134,10 +169,11 @@ public final class MSDStringSorter
         // range WILL fall under a complete sort, not a current index only sort
         final int remainingCharsToProcess = maxIndex - index;
         final boolean shouldMerge = remainingCharsToProcess < MAX_REMAINING_BEFORE_MERGING_RANGES;
-        final int maxMergedRangeSize = remainingCharsToProcess <= MAX_REMAINING_BEFORE_FULL_ARRAYS_SORT ? MAX_ARRAYS_SORT
+        final int maxMergedRangeSize = remainingCharsToProcess < MAX_REMAINING_BEFORE_FULL_ARRAYS_SORT ? MAX_ARRAYS_SORT
             : MAX_INSERTION_SORT;
         for(int i = start; i < end; ++i)
         {
+            //We have to iterate over all the strings in the block anyways, so we might as well track the length 
             if(arr[i].length() > maxIndexBlock)
             {
                 maxIndexBlock = arr[i].length();
@@ -152,11 +188,19 @@ public final class MSDStringSorter
                     if(curChar == '\0')
                     {
                         //Block for null character block, which is a sign that we are at the end of these strings, so just skip this block
-                        continue;
+                    }
+                    //Just "inline sort" blocks of size 2
+                    else if(newSize == 2)
+                    {
+                        sortTwoItems(arr, lastNewIndex, lastNewIndex + 1, index + 1);
+                    }
+                    else if(newSize == 3)
+                    {
+                        sortThreeItems(arr, lastNewIndex, lastNewIndex + 1, lastNewIndex + 2, index + 1);
                     }
                     // If this is a tiny block, try to see if we can accumulate with the
                     // next block
-                    if(shouldMerge &&
+                    else if(shouldMerge &&
                         newSize < MAX_INSERTION_SORT && newSize >= MIN_BLOCK_LEN_TO_MERGE)
                     {
                         // From where we first saw this character to here,
@@ -194,11 +238,7 @@ public final class MSDStringSorter
                             mergeHasMoreThanOne = false;
                             mergeHolder = null;
                         }
-                        //Just "inline sort" blocks of size 2
-                        if(newSize == 2)
-                            sortTwoItems(arr, lastNewIndex, lastNewIndex + 1, index + 1);
-                        else
-                            stack.addFirst(new SortState(lastNewIndex, i, index + 1, maxIndexBlock));
+                        stack.addFirst(new SortState(lastNewIndex, i, index + 1, maxIndexBlock));
                     }
                 }
                 else
@@ -245,7 +285,7 @@ public final class MSDStringSorter
         // range WILL fall under a complete sort, not a current index only sort
         final int remainingCharsToProcess = maxIndex - index;
         final boolean shouldMerge = remainingCharsToProcess < MAX_REMAINING_BEFORE_MERGING_RANGES;
-        final int maxMergedRangeSize = remainingCharsToProcess <= MAX_REMAINING_BEFORE_FULL_ARRAYS_SORT ? MAX_ARRAYS_SORT
+        final int maxMergedRangeSize = remainingCharsToProcess < MAX_REMAINING_BEFORE_FULL_ARRAYS_SORT ? MAX_ARRAYS_SORT
             : MAX_INSERTION_SORT;
         // curChar MUST be the min char seen
         for(int i = 0; i < buckets.length - 1; ++i)
@@ -262,7 +302,20 @@ public final class MSDStringSorter
             // record block
             if(newSize > 1) // Skip sub-blocks of size 1, one of the advantages of MSD sort
             {
-                if(updateMaxSize)
+                //Just "inline sort" blocks of size 2
+                if(newSize == 2)
+                {
+                    sortTwoItems(arr, regionStart, regionStart + 1, index + 1);
+                    continue;
+                }
+                if(newSize == 3)
+                {
+                    sortThreeItems(arr, regionStart, regionStart + 1, regionStart + 2, index + 1);
+                    continue;
+                }
+                //Even if requested, don't bother tracking max length unless it is long enough not to get stuffed into a full sort next round
+                //The full sorts don't benefit from knowing the max length ahead of time
+                if(updateMaxSize && newSize > maxMergedRangeSize)
                 {
                     for(int j = regionStart; j < regionEnd; ++j)
                     {
@@ -311,11 +364,7 @@ public final class MSDStringSorter
                         mergeHasMoreThanOne = false;
                         mergeHolder = null;
                     }
-                    //Just "inline sort" blocks of size 2
-                    if(newSize == 2)
-                        sortTwoItems(arr, regionStart, regionStart + 1, index + 1);
-                    else
-                        stack.addFirst(new SortState(regionStart, regionEnd, index + 1, maxIndexBlock));
+                    stack.addFirst(new SortState(regionStart, regionEnd, index + 1, maxIndexBlock));
                 }
             }
             else
@@ -347,7 +396,9 @@ public final class MSDStringSorter
             else
             {
                 int maxIndexBlock = -1;
-                if(updateMaxSize)
+                //Even if requested, don't bother tracking max length unless it is long enough not to get stuffed into a full sort next round
+                //The full sorts don't benefit from knowing the max length ahead of time
+                if(updateMaxSize && newSize > maxMergedRangeSize)
                 {
                     for(int j = regionStart; j < regionEnd; ++j)
                     {
@@ -393,6 +444,11 @@ public final class MSDStringSorter
         if(len == 2)
         {
             sortTwoItems(arr, fromIndex, fromIndex + 1, charIndex);
+            return FULLY_SORTED;
+        }
+        if(len == 3)
+        {
+            sortThreeItems(arr, fromIndex, fromIndex + 1, fromIndex + 2, charIndex);
             return FULLY_SORTED;
         }
         if(len <= MAX_INSERTION_SORT)
@@ -458,6 +514,56 @@ public final class MSDStringSorter
         if(compareSubtrStartingAt(arr[index1], arr[index2], charIndex) > 0)
             exchange(arr, index1, index2);
     }
+    
+    //Adapted from The Art of Computer Programming
+    private final static void sortThreeItems(final String[] arr, 
+        final int index1, final int index2, final int index3, final int charIndex)
+    {
+        assert index1 < index2;
+        assert index2 < index3;
+        if(compareSubtrStartingAt(arr[index1], arr[index2], charIndex) > 0)
+        {
+            String temp = arr[index1];
+            if(compareSubtrStartingAt(arr[index2], arr[index3], charIndex) > 0)
+            {
+                arr[index1] = arr[index3];
+                arr[index3] = temp;
+            }
+            else
+            {
+                //compareSubtrStartingAt(arr[index1], arr[index3], charIndex) > 0
+                if(compareSubtrStartingAt(temp, arr[index3], charIndex) > 0)
+                {
+                    arr[index1] = arr[index2];
+                    arr[index2] = arr[index3];
+                    arr[index3] = temp;
+                }
+                else
+                {
+                    arr[index1] = arr[index2];
+                    arr[index2] = temp;
+                }
+            }
+        }
+        else
+        {
+            if(compareSubtrStartingAt(arr[index2], arr[index3], charIndex) > 0)
+            {
+                String temp = arr[index3];
+                arr[index3] = arr[index2];
+                //compareSubtrStartingAt(arr[index1], original arr[index3], charIndex) > 0
+                if(compareSubtrStartingAt(arr[index1], temp, charIndex) > 0)
+                {
+                    arr[index2] = arr[index1];
+                    arr[index1] = temp;
+                }
+                else
+                {
+                    arr[index2] = temp;
+                }
+            }
+        }
+    }
 
     private static final void
         insertionSort(String[] arr, int fromIndex, int toIndex, int charIndex)
@@ -493,7 +599,7 @@ public final class MSDStringSorter
                 if(arr[i].length() > maxSeenSize)
                     maxSeenSize = arr[i].length();
                 final char c = charAt(arr[i], charIndex);
-                final int cAsInt = (int)c;
+                final int cAsInt = c;
                 if(cAsInt < minCharSeen) minCharSeen = cAsInt;
                 if(cAsInt > maxCharSeen) maxCharSeen = cAsInt;
                 charCountBuffer = com.google.common.primitives.Ints.ensureCapacity(charCountBuffer,
@@ -508,7 +614,7 @@ public final class MSDStringSorter
             for(int i = fromIndex; i < toIndex; ++i)
             {
                 final char c = charAt(arr[i], charIndex);
-                final int cAsInt = (int)c;
+                final int cAsInt = c;
                 if(cAsInt < minCharSeen) minCharSeen = cAsInt;
                 if(cAsInt > maxCharSeen) maxCharSeen = cAsInt;
                 charCountBuffer = com.google.common.primitives.Ints.ensureCapacity(charCountBuffer,
@@ -544,7 +650,7 @@ public final class MSDStringSorter
             char c = charAt(arr[i], charIndex);
             // Copy to where the section is currently at, while incrementing that
             // section's index
-            wc[(indexes[(int)c - minCharSeen]++) + fromIndex] = arr[i];
+            wc[(indexes[c - minCharSeen]++) + fromIndex] = arr[i];
         }
 
         // Copy back over into the real array
@@ -610,10 +716,10 @@ public final class MSDStringSorter
         }
     }
 
-    static final int compareSubtrStartingAt(String s1, String s2, int index)
+    static final int compareSubtrStartingAt(final String s1, final String s2, final int index)
     {
-        int len1 = s1.length();
-        int len2 = s2.length();
+        final int len1 = s1.length();
+        final int len2 = s2.length();
         if(len1 <= index)
         {
             if(len2 <= index) return 0;
@@ -749,7 +855,7 @@ public final class MSDStringSorter
         @Override
         public String toString()
         {
-            return ("[" + start + ", " + end + ") @ " + index);
+            return "[" + start + ", " + end + ") @ " + index + " (max: " + maxIndex + ')';
         }
 
         /**
@@ -778,8 +884,8 @@ public final class MSDStringSorter
 
     }
 
-    private static final int NUM_TIMES_WARMUP = 3000;
-    private static final int NUM_TIMES_RUN_SORT = 50000;
+    private static final int NUM_TIMES_WARMUP = 200;
+    private static final int NUM_TIMES_RUN_SORT = 1500;
     private static final int MAX_NUM_TO_PRINT = 1000;
 
     private static final int TIME_TO_PAUSE_AFTER_WARMUP = 8;
@@ -791,12 +897,12 @@ public final class MSDStringSorter
         // As of Java 1.7.0_02, java.util.Arrays has a whopping 124 methods in it.
         // Due to the nature of methods, there are ALOT of shared prefixes, making this a
         // decent test candidate
-        //String[] test = org.apache.commons.io.IOUtils.readLines(new java.io.BufferedInputStream(
-        //    MSDStringSorter.class.getResourceAsStream("usagov_bitly_data2012-10-29-1351522030")))
-        //    .toArray(new String[0]);
+        String[] test = org.apache.commons.io.IOUtils.readLines(new java.io.BufferedInputStream(
+            MSDStringSorter.class.getResourceAsStream("usagov_bitly_data2012-10-29-1351522030")))
+            .toArray(new String[0]);
         //String[] test = org.apache.commons.io.IOUtils.readLines(MSDStringSorter.class.getResourceAsStream("README")).toArray(new String[0]);
-        String[] test = toArrayString(Arrays.class.getDeclaredMethods());
-        java.util.Collections.shuffle(Arrays.asList(test));
+        //String[] test = toArrayString(Arrays.class.getDeclaredMethods());
+        //java.util.Collections.shuffle(Arrays.asList(test));
         //String[] test = new String[5000];
         //Arrays.fill(test, "");
         System.err.println("Dataset is: " + test.length + " entries long");
