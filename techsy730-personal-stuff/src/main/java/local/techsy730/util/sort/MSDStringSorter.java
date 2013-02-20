@@ -1,6 +1,7 @@
 package local.techsy730.util.sort;
 
 import java.io.IOException;
+import java.util.Comparator;
 import java.util.Deque;
 import java.util.Arrays;
 
@@ -31,7 +32,7 @@ public final class MSDStringSorter
     //NOTE Keep in mind, if the Arrays.sort only on the current index is used
     //then we have to loop through that segment AGAIN to find the next layer of "chunks".
     //Thus, this needs to be kept somewhat low.
-    private static final int MAX_ARRAYS_SORT = 40;
+    private static final int MAX_ARRAYS_SORT = 31;
     
     //This causes a few extra loops to be run, and makes other loops gain extra operations, thus keep it somewhat low
     //However, the savings from a correctly computed max length can be rather large, so thus you don't need to be too conservative with it.
@@ -42,10 +43,10 @@ public final class MSDStringSorter
 
     // For these two values, SMALLER numbers mean MORE hesistant to trigger the optimization
     //Merging is a rather expensive operation, just to save a few method calls. Thus, be conservative with this number. 
-    private static final int MAX_REMAINING_BEFORE_MERGING_RANGES = 12;
+    private static final int MAX_REMAINING_BEFORE_MERGING_RANGES = 18;
     //Be even more conservative with this number, as not only will it trigger more aggressive merges, but also cause a non-insertion call to
     //arrays sort to look at all of the remaining characters, which could get expensive.
-    private static final int MAX_REMAINING_BEFORE_FULL_ARRAYS_SORT = 4;
+    private static final int MAX_REMAINING_BEFORE_FULL_ARRAYS_SORT = 8;
     
 /*
     static
@@ -59,7 +60,17 @@ public final class MSDStringSorter
         sort(arr, 0, arr.length);
     }
     
-    public static void sort(String[] arr, int fromIndex, int toIndex)
+    public static final void sort(String[] arr, int fromIndex, int toIndex)
+    {
+        sortPartially(Integer.MAX_VALUE, arr, fromIndex, toIndex);
+    }
+    
+    public static final void sortPartially(int minCharsToSort, String[] arr)
+    {
+        sortPartially(minCharsToSort, arr, 0, arr.length);
+    }
+    
+    public static void sortPartially(int minCharsToSort, String[] arr, int fromIndex, int toIndex)
     {
         // TODO We can do much better if we dump to char[] first, and also be willing to
         // have a "working" copy
@@ -87,8 +98,8 @@ public final class MSDStringSorter
         // usage cases
         // Not using <> syntactic shortcut to maintain source compatibility with java 1.6
         Deque<SortState> stack = new java.util.ArrayDeque<SortState>(
-            Math.max(16, (int)Math.sqrt(toIndex - fromIndex)));
-        stack.addFirst(new SortState(fromIndex, toIndex, 0, Integer.MAX_VALUE));
+            Math.max(16, com.google.common.math.IntMath.log2(len, java.math.RoundingMode.UP)));
+        stack.addFirst(new SortState(fromIndex, toIndex, 0, minCharsToSort));
         final int[] baseMaxIndexHolder = new int[1];
         while(!stack.isEmpty())
         {
@@ -115,7 +126,7 @@ public final class MSDStringSorter
         if(buckets == FULLY_SORTED) return;
         if(maxIndexHolder[0] != -1)
         {
-            maxIndex = maxIndexHolder[0];
+            maxIndex = Math.min(maxIndexHolder[0], maxIndex);
             needMaxIndexUpdate = end - start < MAX_UPDATE_MAX_LENGTH;
         }
 
@@ -147,8 +158,7 @@ public final class MSDStringSorter
                 if(buckets == INDEX_SORTED_NO_BUCKETS)
                     splitByCharGroups(arr, stack, start, end, index, maxIndex, curChar, currentState);
                 else
-                    splitByCharGroups(arr, stack, start, end, index, maxIndex, buckets, currentState,
-                        needMaxIndexUpdate);
+                    splitByCharGroups(arr, stack, start, end, index, maxIndex, buckets, currentState, needMaxIndexUpdate);
             }
         }
         else
@@ -180,6 +190,7 @@ public final class MSDStringSorter
             }
             if(charAt(arr[i], index) != curChar)
             {
+                maxIndexBlock = Math.min(maxIndexBlock, maxIndex);
                 // New character, record end of block, and track new character
                 final int newSize = i - lastNewIndex;
                 if(newSize > 1) // Skip sub-blocks of size 1, one of the advantages of MSD
@@ -264,6 +275,7 @@ public final class MSDStringSorter
 
         // The for loop may miss one block, the final one. If so, add it now
         final int newSize = end - lastNewIndex;
+        maxIndexBlock = Math.min(maxIndexBlock, maxIndex);
         if(newSize > 1)
         {
             //Just "inline sort" blocks of size 2
@@ -324,6 +336,7 @@ public final class MSDStringSorter
                             maxIndexBlock = arr[j].length();
                         }
                     }
+                    maxIndexBlock = Math.min(maxIndexBlock, maxIndex);
                 }
                 else
                     maxIndexBlock = maxIndex;
@@ -393,6 +406,8 @@ public final class MSDStringSorter
             //Just "inline sort" blocks of size 2
             if(newSize == 2)
                 sortTwoItems(arr, regionStart, regionStart + 1, index + 1);
+            else if(newSize == 3)
+                sortThreeItems(arr, regionStart, regionStart + 1, regionStart + 2, index + 1);
             else
             {
                 int maxIndexBlock = -1;
@@ -407,6 +422,7 @@ public final class MSDStringSorter
                             maxIndexBlock = arr[j].length();
                         }
                     }
+                    maxIndexBlock = Math.min(maxIndexBlock, maxIndex);
                 }
                 else
                     maxIndexBlock = maxIndex;
@@ -490,14 +506,16 @@ public final class MSDStringSorter
         // If we want the shared prefix starting past the end, clearly there is no shared
         // prefix starting here
         if(charIndex >= len) return 0;
-        //Eww, O(m^2) algorithm (where m is the number of characters remaining to be processed.
-        //Granted, time spent here cuts down on the m of the next O(m*n) "top level" cycle
-        //(indeed, if this hits the worst case, all characters matching, than this range needs no further processing)
-        //But on average, is this worth it?
+        //Is there a faster way to do this than a O(n*m) algorithm?
         for(int i = charIndex; i < len; ++i)
         {
             char currentChar = toTestAgainst.charAt(i);
-            for(int j = fromIndex + 1; j < toIndex; ++j)
+            final int lastIndex = toIndex - 1; 
+            //First off, check the char of the last string of this block, as if there are mismatches, that is a very likely place to find one of them
+            if(charAt(arr[lastIndex], i) != currentChar)
+                return i - charIndex;
+            //Then, check the rest
+            for(int j = fromIndex + 1; j < lastIndex; ++j)
             {
                 if(charAt(arr[j], i) != currentChar)
                     return i - charIndex;
@@ -602,8 +620,7 @@ public final class MSDStringSorter
                 final int cAsInt = c;
                 if(cAsInt < minCharSeen) minCharSeen = cAsInt;
                 if(cAsInt > maxCharSeen) maxCharSeen = cAsInt;
-                charCountBuffer = com.google.common.primitives.Ints.ensureCapacity(charCountBuffer,
-                    cAsInt, 20);
+                charCountBuffer = com.google.common.primitives.Ints.ensureCapacity(charCountBuffer, cAsInt, 20);
                 ++charCountBuffer[cAsInt];
             }
             maxIndexHolder[0] = maxSeenSize;
@@ -617,8 +634,7 @@ public final class MSDStringSorter
                 final int cAsInt = c;
                 if(cAsInt < minCharSeen) minCharSeen = cAsInt;
                 if(cAsInt > maxCharSeen) maxCharSeen = cAsInt;
-                charCountBuffer = com.google.common.primitives.Ints.ensureCapacity(charCountBuffer,
-                    cAsInt, 20);
+                charCountBuffer = com.google.common.primitives.Ints.ensureCapacity(charCountBuffer, cAsInt, 20);
                 ++charCountBuffer[cAsInt];
             }
             maxIndexHolder[0] = -1;
@@ -885,10 +901,11 @@ public final class MSDStringSorter
     }
 
     private static final int NUM_TIMES_WARMUP = 200;
-    private static final int NUM_TIMES_RUN_SORT = 1500;
+    private static final int NUM_TIMES_RUN_SORT = 1000;
     private static final int MAX_NUM_TO_PRINT = 1000;
 
     private static final int TIME_TO_PAUSE_AFTER_WARMUP = 8;
+    private static final int INDEX_TO_PART_SORT_TO = 21;
 
     public static void main(String... args) throws IOException, InterruptedException
     {
@@ -897,8 +914,8 @@ public final class MSDStringSorter
         // As of Java 1.7.0_02, java.util.Arrays has a whopping 124 methods in it.
         // Due to the nature of methods, there are ALOT of shared prefixes, making this a
         // decent test candidate
-        String[] test = org.apache.commons.io.IOUtils.readLines(new java.io.BufferedInputStream(
-            MSDStringSorter.class.getResourceAsStream("usagov_bitly_data2012-10-29-1351522030")))
+        String[] test = org.apache.commons.io.IOUtils.readLines(
+            MSDStringSorter.class.getResourceAsStream("usagov_bitly_data2012-10-29-1351522030"))
             .toArray(new String[0]);
         //String[] test = org.apache.commons.io.IOUtils.readLines(MSDStringSorter.class.getResourceAsStream("README")).toArray(new String[0]);
         //String[] test = toArrayString(Arrays.class.getDeclaredMethods());
@@ -906,6 +923,10 @@ public final class MSDStringSorter
         //String[] test = new String[5000];
         //Arrays.fill(test, "");
         System.err.println("Dataset is: " + test.length + " entries long");
+        
+        final Comparator<String> compWith = 
+            new NaturalSubstringComparator(INDEX_TO_PART_SORT_TO);
+        
         for(String s : test)
         {
             if(s.contains("\0"))
@@ -923,6 +944,9 @@ public final class MSDStringSorter
         {
             sort(test.clone());
             Arrays.sort(test.clone());
+            String[] testClone = test.clone();
+            sortPartially(INDEX_TO_PART_SORT_TO, testClone);
+            Arrays.sort(testClone, compWith);
         }
 
         // Alright, clean up, and pause
@@ -932,16 +956,17 @@ public final class MSDStringSorter
         System.gc();
 
         String[] test2 = test.clone();
+        String[] test3 = test.clone();
 
         System.err.println("Starting MSD sort test");
         if(test.length < MAX_NUM_TO_PRINT) System.out.println(Arrays.toString(test));
-        long startTime = System.currentTimeMillis();
+        long startTime = System.nanoTime();
         for(int i = 0; i < NUM_TIMES_RUN_SORT - 1; ++i)
         {
             sort(test.clone());
         }
         sort(test);
-        long endTime = System.currentTimeMillis();
+        long endTime = System.nanoTime();
 
         long msdSortTime = endTime - startTime;
 
@@ -949,34 +974,64 @@ public final class MSDStringSorter
         System.gc();
         System.err.println("Starting Arrays.sort test");
 
-        startTime = System.currentTimeMillis();
+        startTime = System.nanoTime();
         for(int i = 0; i < NUM_TIMES_RUN_SORT - 1; ++i)
         {
             Arrays.sort(test2.clone());
         }
         Arrays.sort(test2);
-        endTime = System.currentTimeMillis();
-        System.err.println("Finished Arrays.sort test");
-
+        endTime = System.nanoTime();
+        
         long arraysSortTime = endTime - startTime;
+        
+        System.err.println("Finished Arrays.sort test");
+        System.gc();
+        System.err.println("Starting partial sort to Arrays.sort test");
+        
+        startTime = System.nanoTime();
+        for(int i = 0; i < NUM_TIMES_RUN_SORT - 1; ++i)
+        {
+            String[] test3Clone = test3.clone();
+            sortPartially(INDEX_TO_PART_SORT_TO, test3Clone);
+            Arrays.sort(test3Clone, compWith);
+        }
+        sortPartially(INDEX_TO_PART_SORT_TO, test3);
+        Arrays.sort(test3, compWith);
+        endTime = System.nanoTime();
+        System.err.println("Finished partial sort to Arrays.sort test");
+        
+        long partialSortTime = endTime - startTime;
+     
         if(test.length < MAX_NUM_TO_PRINT)
         {
             System.out.println(Arrays.toString(test));
             System.out.println(Arrays.toString(test2));
+            System.out.println(Arrays.toString(test3));
         }
         boolean matchedUp = Arrays.equals(test, test2);
         if(!matchedUp)
         {
-            System.err.println("Sort mismatch");
+            System.err.println("Sort mismatch: full MSD sort");
             int misMatchIndex = findDiffIndex(test, test2);
             System.err.println("@" + misMatchIndex + ": \"" + test[misMatchIndex] + "\" != \"" +
                 test2[misMatchIndex] + '"');
         }
+        
+        matchedUp = Arrays.equals(test3, test2);
+        if(!matchedUp)
+        {
+            System.err.println("Sort mismatch: partial MSD sort");
+            int misMatchIndex = findDiffIndex(test3, test2);
+            System.err.println("@" + misMatchIndex + ": \"" + test3[misMatchIndex] + "\" != \"" +
+                test2[misMatchIndex] + '"');
+        }
 
-        System.out.println("MSD sort, total:" + msdSortTime + ", average: " +
-            ((double)msdSortTime / NUM_TIMES_RUN_SORT));
-        System.out.println("Arrays.sort sort, total:" + arraysSortTime + ", average: " +
-            ((double)arraysSortTime / NUM_TIMES_RUN_SORT));
+        System.out.println("MSD sort, total:" + msdSortTime / 1000000 + ", average: " +
+            ((double)msdSortTime / NUM_TIMES_RUN_SORT) / 1000000);
+        System.out.println("Arrays.sort sort, total:" + arraysSortTime / 1000000 + ", average: " +
+            ((double)arraysSortTime / NUM_TIMES_RUN_SORT) / 1000000);
+        System.out.println("Partial sort to Arrays.sort, total:" + partialSortTime / 1000000 + ", average: " +
+            ((double)partialSortTime / NUM_TIMES_RUN_SORT) / 1000000);
     }
 
     private static String[] toArrayString(Object[] array)
