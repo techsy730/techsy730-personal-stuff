@@ -1,7 +1,5 @@
 package local.techsy730.util.sort;
 
-import java.io.IOException;
-import java.util.Comparator;
 import java.util.Deque;
 import java.util.Arrays;
 
@@ -16,9 +14,6 @@ import java.util.Arrays;
  */
 public final class MSDStringSorter
 {
-    private MSDStringSorter()
-    {} // Utility class
-
     // XXX Empirically determine a good estimate for these constants, based on common
     // usage cases
     //XXX This should be 16 or so on Java 7, but 7 on Java 6
@@ -32,29 +27,44 @@ public final class MSDStringSorter
     //NOTE Keep in mind, if the Arrays.sort only on the current index is used
     //then we have to loop through that segment AGAIN to find the next layer of "chunks".
     //Thus, this needs to be kept somewhat low.
-    private static final int MAX_ARRAYS_SORT = 31;
+    private static final int MAX_ARRAYS_INDEX_SORT = 31;
+    private static final int MAX_ARRAYS_FULL_SORT = 65;
+    
+    @SuppressWarnings("unused") //One of these cases will always be marked as "dead"
+    private static final int ARRAYS_SORT_CHECK = (MAX_ARRAYS_FULL_SORT > MAX_ARRAYS_INDEX_SORT) ? MAX_ARRAYS_FULL_SORT : MAX_ARRAYS_INDEX_SORT;
     
     //This causes a few extra loops to be run, and makes other loops gain extra operations, thus keep it somewhat low
     //However, the savings from a correctly computed max length can be rather large, so thus you don't need to be too conservative with it.
-    private static final int MAX_UPDATE_MAX_LENGTH = (int)(MAX_ARRAYS_SORT * 1.4);
+    private static final int MAX_UPDATE_MAX_LENGTH = (int)(ARRAYS_SORT_CHECK * 1.6);
     
     //Set this to the minimum that there isn't a specific n-way sort method for.
     private static final int MIN_BLOCK_LEN_TO_MERGE = 4;
+    
+    //If this is false, then bucket sort will be used even if length < MAX_ARRAYS_INDEX_SORT but not close enough to the end to trigger a full sort
+    //(Except for length < MAX_INSERTION_SORT, which will always fully sort 
+    private static final boolean DO_NON_FULL_ARRAYS_SORT = true;
 
     // For these two values, SMALLER numbers mean MORE hesistant to trigger the optimization
     //Merging is a rather expensive operation, just to save a few method calls. Thus, be conservative with this number. 
-    private static final int MAX_REMAINING_BEFORE_MERGING_RANGES = 18;
+    private static final int MAX_REMAINING_BEFORE_MERGING_RANGES = 2;
     //Be even more conservative with this number, as not only will it trigger more aggressive merges, but also cause a non-insertion call to
     //arrays sort to look at all of the remaining characters, which could get expensive.
-    private static final int MAX_REMAINING_BEFORE_FULL_ARRAYS_SORT = 8;
+    private static final int MAX_REMAINING_BEFORE_FULL_ARRAYS_SORT = 12;
     
-/*
+    /*
     static
     {
         assert MAX_INSERTION_SORT <= MAX_ARRAYS_SORT;
-        assert MAX_REMAINING_BEFORE_FULL_ARRAYS_SORT <= MAX_REMAINING_BEFORE_MERGING_RANGES;
     }
 */
+    
+    private MSDStringSorter(Deque<SortState> stack, String[] arr, String[] wc)
+    {
+        this.stack = stack;
+        this.arr = arr;
+        this.wc = wc;
+    }
+
     public static final void sort(String[] arr)
     {
         sort(arr, 0, arr.length);
@@ -72,8 +82,7 @@ public final class MSDStringSorter
     
     public static void sortPartially(int minCharsToSort, String[] arr, int fromIndex, int toIndex)
     {
-        // TODO We can do much better if we dump to char[] first, and also be willing to
-        // have a "working" copy
+        // TODO We can do much better if we dump to char[] first
         if(checkBounds(arr.length, fromIndex, toIndex)) return;
         final int len = toIndex - fromIndex;
         if(len == 2)
@@ -86,7 +95,7 @@ public final class MSDStringSorter
             sortThreeItems(arr, fromIndex, fromIndex + 1, fromIndex + 2, 0);
             return;
         }
-        if(len <= MAX_ARRAYS_SORT)
+        if(len <= MAX_ARRAYS_FULL_SORT)
         {
             Arrays.sort(arr, fromIndex, toIndex);
             return;
@@ -94,39 +103,53 @@ public final class MSDStringSorter
         String[] wc = new String[arr.length];
         // Thanks to how large strings can get, we cannot use recursion. As such, we must
         // maintain our own stack to maintain current state
-        // XXX Empirically determine a good estimate for preallocation, based on common
-        // usage cases
+        // XXX Empirically determine a good estimate for preallocation, based on common usage cases
         // Not using <> syntactic shortcut to maintain source compatibility with java 1.6
+        @SuppressWarnings("unused") //This is to keep a 1.7 compiler from complaining about the reduntant type specification
         Deque<SortState> stack = new java.util.ArrayDeque<SortState>(
             Math.max(16, com.google.common.math.IntMath.log2(len, java.math.RoundingMode.UP)));
         stack.addFirst(new SortState(fromIndex, toIndex, 0, minCharsToSort));
-        final int[] baseMaxIndexHolder = new int[1];
+        //The thing that will hold our sort progress
+        new MSDStringSorter(stack, arr, wc).doSort();
+    }
+
+    private final Deque<SortState> stack;
+    private final String[] arr;
+    private final String[] wc;
+    private SortState tempHolder;
+    private SortState mergeHolder = null;
+    private int maxIndexTempTrack = -1;
+    private boolean mergeHasMoreThanOne = false;
+    
+    private final void doSort()
+    {
         while(!stack.isEmpty())
         {
             // "Recurse"
-            processPart(arr, wc, stack, stack.pollFirst(), baseMaxIndexHolder);
+            processPart(stack.pollFirst());
         }
         return; // This redundant return is only so we can set a breakpoint here.
     }
 
-    private static void processPart(String[] arr, String[] wc, Deque<SortState> stack,
-        SortState currentState, final int[] maxIndexHolder)
+    private void processPart(SortState currentState)
     {
+        @SuppressWarnings("hiding") //We are trying to shift from a instance member lookup to a local variable lookup for performance 
+        final String[] arr = this.arr;
         final int start = currentState.start;
         final int end = currentState.end;
         final int index = currentState.index;
         int maxIndex = currentState.maxIndex;
         // If there are no characters in this block, just return now
-        if(maxIndex == 0) return;
+        if(maxIndex <= 0) return;
 
         assert index <= maxIndex : index + " > max of " + maxIndex;
         boolean needMaxIndexUpdate = maxIndex == Integer.MAX_VALUE || end - start <= MAX_UPDATE_MAX_LENGTH;
         // First, sort on the current character
-        int[] buckets = doSortOnPart(arr, wc, start, end, index, maxIndex, needMaxIndexUpdate, maxIndexHolder);
+        int[] buckets = doSortOnPart(start, end, index, maxIndex, needMaxIndexUpdate);
         if(buckets == FULLY_SORTED) return;
-        if(maxIndexHolder[0] != -1)
+        if(maxIndexTempTrack != -1)
         {
-            maxIndex = Math.min(maxIndexHolder[0], maxIndex);
+            maxIndex = Math.min(maxIndexTempTrack, maxIndex);
             needMaxIndexUpdate = end - start < MAX_UPDATE_MAX_LENGTH;
         }
 
@@ -139,48 +162,56 @@ public final class MSDStringSorter
         {
             if(curChar == charAt(arr[end - 1], index))
             {
-                if(curChar == '\0')
-                {
-                    //All of them were the null char, which is a sign that all of them are past the string size
-                    return;
-                }
-                // Common case, all the characters at this level were the same, just
-                // immediately move on
-                int sharedPrefixLen = findSharedPrefixLen(arr, start, end, index + 1, maxIndex);
-                // Shared prefix length might be zero if all of them are them are shorter
-                // than the current index
-                stack.addFirst(currentState.setState(start, end, index + sharedPrefixLen + 1, maxIndex));
+                handleSingleBlockCase(start, end, index, maxIndex, curChar, currentState);
             }
             else
             {
                 assert buckets != FULLY_SORTED;
                 assert buckets.length != 1;
                 if(buckets == INDEX_SORTED_NO_BUCKETS)
-                    splitByCharGroups(arr, stack, start, end, index, maxIndex, curChar, currentState);
+                    splitByCharGroups(start, end, index, maxIndex, curChar, currentState);
                 else
-                    splitByCharGroups(arr, stack, start, end, index, maxIndex, buckets, currentState, needMaxIndexUpdate);
+                    splitByCharGroups(start, end, index, maxIndex, buckets, currentState, needMaxIndexUpdate);
             }
         }
         else
             assert index >= maxIndex; // This is just here for a nice breakpoint
     }
 
-    private static void splitByCharGroups(String[] arr, Deque<SortState> stack, final int start,
+    private void handleSingleBlockCase(final int start, final int end, final int index,
+        int maxIndex, char curChar, SortState currentState)
+    {
+        if(curChar == '\0')
+        {
+            //All of them were the null char, which is a sign that all of them are past the string size
+            return;
+        }
+        // Common case, all the characters at this level were the same, just
+        // immediately move on
+        int sharedPrefixLen = findSharedPrefixLen(arr, start, end, index + 1, maxIndex);
+        // Shared prefix length might be zero if all of them are them are shorter
+        // than the current index
+        stack.addFirst(currentState.setState(start, end, index + sharedPrefixLen + 1, maxIndex));
+    }
+
+    private void splitByCharGroups(final int start,
         final int end, final int index, final int maxIndex, char curChar, SortState currentState)
     {
+        @SuppressWarnings("hiding") //We are trying to shift from a instance member lookup to a local variable lookup for performance 
+        final String[] arr = this.arr;
+        tempHolder = currentState;
         int lastNewIndex = start;
         /** Max for the current block we are processing */
         int maxIndexBlock = 0;
-        SortState tempHolder = currentState;
-        SortState mergeHolder = null;
-        boolean mergeHasMoreThanOne = false;
+        
         // Once we start getting near the end of the strings, go ahead and be willing to have larger merges
         // Warning: Whatever range this may be, it MUST be small enough such that merged
         // range WILL fall under a complete sort, not a current index only sort
         final int remainingCharsToProcess = maxIndex - index;
         final boolean shouldMerge = remainingCharsToProcess < MAX_REMAINING_BEFORE_MERGING_RANGES;
-        final int maxMergedRangeSize = remainingCharsToProcess < MAX_REMAINING_BEFORE_FULL_ARRAYS_SORT ? MAX_ARRAYS_SORT
+        final int maxMergedRangeSize = remainingCharsToProcess < MAX_REMAINING_BEFORE_FULL_ARRAYS_SORT ? MAX_ARRAYS_FULL_SORT
             : MAX_INSERTION_SORT;
+        char curChar2 = curChar;
         for(int i = start; i < end; ++i)
         {
             //We have to iterate over all the strings in the block anyways, so we might as well track the length 
@@ -188,68 +219,31 @@ public final class MSDStringSorter
             {
                 maxIndexBlock = arr[i].length();
             }
-            if(charAt(arr[i], index) != curChar)
+            if(charAt(arr[i], index) != curChar2)
             {
                 maxIndexBlock = Math.min(maxIndexBlock, maxIndex);
                 // New character, record end of block, and track new character
                 final int newSize = i - lastNewIndex;
-                if(newSize > 1) // Skip sub-blocks of size 1, one of the advantages of MSD
-                                // sort
+                if(curChar2 == '\0')
                 {
-                    if(curChar == '\0')
-                    {
-                        //Block for null character block, which is a sign that we are at the end of these strings, so just skip this block
-                    }
+                    //Block for null character block, which is a sign that we are at the end of these strings, so just skip this block
+                }
+                else if(newSize > 1) // Skip sub-blocks of size 1, one of the advantages of MSD sort
+                {
                     //Just "inline sort" blocks of size 2
-                    else if(newSize == 2)
-                    {
+                    if(newSize == 2)
                         sortTwoItems(arr, lastNewIndex, lastNewIndex + 1, index + 1);
-                    }
                     else if(newSize == 3)
-                    {
                         sortThreeItems(arr, lastNewIndex, lastNewIndex + 1, lastNewIndex + 2, index + 1);
-                    }
-                    // If this is a tiny block, try to see if we can accumulate with the
-                    // next block
-                    else if(shouldMerge &&
-                        newSize < MAX_INSERTION_SORT && newSize >= MIN_BLOCK_LEN_TO_MERGE)
+                    else
                     {
                         // From where we first saw this character to here,
                         // where the current pos is
-                        SortState newState = new SortState(lastNewIndex, i, index, maxIndexBlock);
-                        SortState newMerged = tempHolder.setState(newState).mergeWith(mergeHolder);
-                        if(newMerged == null || newMerged.length() >= maxMergedRangeSize)
-                        {
-                            // We have grown too big, or hit a non-adjacent region, dump
-                            // the merged so far (minus this block)
-                            stack.addFirst(advanceIndexIfNeeded(mergeHolder, !mergeHasMoreThanOne));
-                            // And then start a new merge range (starting with this block)
-                            mergeHasMoreThanOne = false;
-                            mergeHolder = newState;
-                        }
-                        else
-                        {
-                            if(mergeHolder != null)
-                            {
-                                mergeHasMoreThanOne = true;
-                                mergeHolder.setState(newMerged);
-                            }
-                            else
-                            {
-                                mergeHolder = new SortState(newMerged);
-                            }
-                        }
-                    }
-                    else
-                    {
-                        if(mergeHolder != null) // Can't merge this block, as it is too big,
-                                                // so dump out what we have so far if any                        
-                        {
-                            stack.addFirst(advanceIndexIfNeeded(mergeHolder, !mergeHasMoreThanOne));
-                            mergeHasMoreThanOne = false;
-                            mergeHolder = null;
-                        }
-                        stack.addFirst(new SortState(lastNewIndex, i, index + 1, maxIndexBlock));
+                        final int regionStart = lastNewIndex;
+                        final int regionEnd = i;
+                        // If this is a tiny block, try to see if we can accumulate with the
+                        // next block
+                        trackMergeAndAdd(regionStart, regionEnd, newSize, index, maxIndexBlock, shouldMerge, maxMergedRangeSize);
                     }
                 }
                 else
@@ -258,20 +252,11 @@ public final class MSDStringSorter
                 }
                 lastNewIndex = i;
                 maxIndexBlock = -1;
-                curChar = charAt(arr[i], index);
+                curChar2 = charAt(arr[i], index);
             }
 
         }
-        // Yes, it may be that the last block could be merged in. But that would require
-        // all of the logic above.
-        // It isn't really worth the code complexity
-        // However, we do need to write out any pending merged ranges
-        if(mergeHolder != null)
-        {
-            stack.addFirst(advanceIndexIfNeeded(mergeHolder, !mergeHasMoreThanOne));
-            mergeHasMoreThanOne = false;
-            mergeHolder = null;
-        }
+
 
         // The for loop may miss one block, the final one. If so, add it now
         final int newSize = end - lastNewIndex;
@@ -281,23 +266,29 @@ public final class MSDStringSorter
             //Just "inline sort" blocks of size 2
             if(newSize == 2)
                 sortTwoItems(arr, lastNewIndex, lastNewIndex + 1, index + 1);
+            else if(newSize == 3)
+                sortThreeItems(arr, lastNewIndex, lastNewIndex + 1, lastNewIndex + 2, index + 1);
             else
-                stack.addFirst(currentState.setState(lastNewIndex, end, index + 1, maxIndexBlock));
+                trackMergeAndAdd(lastNewIndex, end, newSize, index, maxIndexBlock, shouldMerge, maxMergedRangeSize, currentState);
         }
+        
+        //End block, thus no more to merge
+        //Thus, flush out any pending merges
+        flushMergedIfNeeded();
     }
 
-    private static void splitByCharGroups(String[] arr, Deque<SortState> stack, final int start,
-        final int end, final int index, final int maxIndex, final int[] buckets, SortState currentState, final boolean updateMaxSize)
+    private void splitByCharGroups(final int start, final int end,
+        final int index, final int maxIndex, final int[] buckets, SortState currentState, final boolean updateMaxSize)
     {
-        SortState mergeHolder = null;
-        boolean mergeHasMoreThanOne = false;
-        SortState tempHolder = currentState;
+        @SuppressWarnings("hiding") //We are trying to shift from a instance member lookup to a local variable lookup for performance 
+        final String[] arr = this.arr;
+        tempHolder = currentState;
         // Once we start getting near the end of the strings, go ahead and be willing to have larger merges
         // Warning: Whatever range this may be, it MUST be small enough such that merged
         // range WILL fall under a complete sort, not a current index only sort
         final int remainingCharsToProcess = maxIndex - index;
         final boolean shouldMerge = remainingCharsToProcess < MAX_REMAINING_BEFORE_MERGING_RANGES;
-        final int maxMergedRangeSize = remainingCharsToProcess < MAX_REMAINING_BEFORE_FULL_ARRAYS_SORT ? MAX_ARRAYS_SORT
+        final int maxMergedRangeSize = remainingCharsToProcess < MAX_REMAINING_BEFORE_FULL_ARRAYS_SORT ? MAX_ARRAYS_FULL_SORT
             : MAX_INSERTION_SORT;
         // curChar MUST be the min char seen
         for(int i = 0; i < buckets.length - 1; ++i)
@@ -316,87 +307,24 @@ public final class MSDStringSorter
             {
                 //Just "inline sort" blocks of size 2
                 if(newSize == 2)
-                {
                     sortTwoItems(arr, regionStart, regionStart + 1, index + 1);
-                    continue;
-                }
-                if(newSize == 3)
-                {
+                else if(newSize == 3)
                     sortThreeItems(arr, regionStart, regionStart + 1, regionStart + 2, index + 1);
-                    continue;
-                }
-                //Even if requested, don't bother tracking max length unless it is long enough not to get stuffed into a full sort next round
-                //The full sorts don't benefit from knowing the max length ahead of time
-                if(updateMaxSize && newSize > maxMergedRangeSize)
-                {
-                    for(int j = regionStart; j < regionEnd; ++j)
-                    {
-                        if(arr[j].length() > maxIndexBlock)
-                        {
-                            maxIndexBlock = arr[j].length();
-                        }
-                    }
-                    maxIndexBlock = Math.min(maxIndexBlock, maxIndex);
-                }
-                else
-                    maxIndexBlock = maxIndex;
-                // If this is a tiny block, try to see if we can accumulate with the next block
-                if(shouldMerge &&
-                    newSize < MAX_INSERTION_SORT && newSize >= MIN_BLOCK_LEN_TO_MERGE)
-                {
-                    SortState newState = new SortState(regionStart, regionEnd, index, maxIndexBlock);
-                    SortState newMerged = tempHolder.setState(newState).mergeWith(mergeHolder);
-                    if(newMerged == null || newMerged.length() >= maxMergedRangeSize)
-                    {
-                        // We have grown too big, or hit a non-adjacent region, dump the
-                        // merged so far (minus this block)
-                        stack.addFirst(advanceIndexIfNeeded(mergeHolder, !mergeHasMoreThanOne));
-                        // And then start a new merge range (starting with this block)
-                        mergeHasMoreThanOne = false;
-                        mergeHolder = newState;
-                    }
-                    else
-                    {
-                        if(mergeHolder != null) 
-                        {
-                            mergeHolder.setState(newMerged);
-                            mergeHasMoreThanOne = true;
-                        }
-                        else
-                        {
-                            mergeHolder = new SortState(newMerged);
-                        }
-                    }
-                }
-                else
-                {
-                    if(mergeHolder != null) // Can't merge this block, as it is too big,
-                                            // so dump out what we have so far if any
-                    {
-                        stack.addFirst(advanceIndexIfNeeded(mergeHolder, !mergeHasMoreThanOne));
-                        mergeHasMoreThanOne = false;
-                        mergeHolder = null;
-                    }
-                    stack.addFirst(new SortState(regionStart, regionEnd, index + 1, maxIndexBlock));
-                }
+                maxIndexBlock = conditionalFindMaxIndexBlock(regionStart, regionEnd, newSize, maxIndex, updateMaxSize, maxMergedRangeSize);
+                trackMergeAndAdd(regionStart, regionEnd, newSize, index, maxIndexBlock, shouldMerge, maxMergedRangeSize);
             }
             else
             {
                 assert newSize <= 1; // This is just here for a nice breakpoint
             }
         }
-
+    
         // Yes, it may be that the last block could be merged in. But that would require
         // all of the logic above.
         // It isn't really worth the code complexity
         // However, we do need to write out any pending merged ranges
-        if(mergeHolder != null)
-        {
-            stack.addFirst(advanceIndexIfNeeded(mergeHolder, !mergeHasMoreThanOne));
-            mergeHasMoreThanOne = false;
-            mergeHolder = null;
-        }
-
+        flushMergedIfNeeded();
+    
         // The for loop may miss one block, the final one. If so, add it now
         final int regionStart = buckets[buckets.length - 1] + start;
         final int regionEnd = end;
@@ -408,26 +336,105 @@ public final class MSDStringSorter
                 sortTwoItems(arr, regionStart, regionStart + 1, index + 1);
             else if(newSize == 3)
                 sortThreeItems(arr, regionStart, regionStart + 1, regionStart + 2, index + 1);
+            int maxIndexBlock;
+            //Even if requested, don't bother tracking max length unless it is long enough not to get stuffed into a full sort next round
+            //The full sorts don't benefit from knowing the max length ahead of time
+            maxIndexBlock = conditionalFindMaxIndexBlock(regionStart, regionEnd, newSize, maxIndex, updateMaxSize, maxMergedRangeSize);
+            trackMergeAndAdd(regionStart, regionEnd, newSize, index, maxIndexBlock, shouldMerge, maxMergedRangeSize, currentState);
+        }
+    }
+
+    private final int conditionalFindMaxIndexBlock(final int regionStart, final int regionEnd,
+        final int newSize, final int maxIndex, final boolean updateMaxSize,
+        final int maxMergedRangeSize)
+    {
+        int maxIndexBlock;
+        if(updateMaxSize && newSize > maxMergedRangeSize)
+        {
+            maxIndexBlock = tryFindMaxIndexBlock(regionStart, regionEnd, maxIndex);
+        }
+        else
+            maxIndexBlock = maxIndex;
+        return maxIndexBlock;
+    }
+
+    private final int tryFindMaxIndexBlock(final int regionStart, final int regionEnd, final int maxIndex)
+    {
+        if(regionEnd >= regionStart)
+            return maxIndex;
+        @SuppressWarnings("hiding") //We are trying to shift from a instance member lookup to a local variable lookup for performance 
+        final String[] arr = this.arr;
+        int maxIndexBlock = -1;
+        for(int j = regionStart; j < regionEnd; ++j)
+        {
+            if(arr[j].length() > maxIndexBlock)
+            {
+                maxIndexBlock = arr[j].length();
+            }
+        }
+        return Math.min(maxIndexBlock, maxIndex);
+    }
+
+    private void
+        trackMergeAndAdd(final int regionStart, final int regionEnd, final int newSize,
+            final int index, int maxIndexBlock, final boolean shouldMerge,
+            final int maxMergedRangeSize)
+    {
+        trackMergeAndAdd(regionStart, regionEnd, newSize, index, maxIndexBlock, shouldMerge, maxMergedRangeSize, new SortState());
+    }
+    
+    private void
+        trackMergeAndAdd(final int regionStart, final int regionEnd, final int newSize,
+            final int index, int maxIndexBlock, final boolean shouldMerge,
+            final int maxMergedRangeSize, SortState toUseState)
+    {
+        if(shouldMerge &&
+            newSize < MAX_INSERTION_SORT && newSize >= MIN_BLOCK_LEN_TO_MERGE)
+        {
+            assert mergeHolder != toUseState;
+            //We might get a clash between the temp state holder and the state to reuse
+            //Must check for that
+            SortState newState =
+                toUseState == tempHolder ?
+                    new SortState(regionStart, regionEnd, index, maxIndexBlock) :
+                    toUseState.setState(regionStart, regionEnd, index, maxIndexBlock);
+            SortState newMerged = tempHolder.setState(newState).mergeWith(mergeHolder);
+            if(newMerged == null || newMerged.length() >= maxMergedRangeSize)
+            {
+                // We have grown too big, or hit a non-adjacent region, dump the
+                // merged so far (minus this block)
+                stack.addFirst(advanceIndexIfNeeded(mergeHolder, !mergeHasMoreThanOne));
+                // And then start a new merge range (starting with this block)
+                mergeHasMoreThanOne = false;
+                mergeHolder = newState;
+            }
             else
             {
-                int maxIndexBlock = -1;
-                //Even if requested, don't bother tracking max length unless it is long enough not to get stuffed into a full sort next round
-                //The full sorts don't benefit from knowing the max length ahead of time
-                if(updateMaxSize && newSize > maxMergedRangeSize)
+                if(mergeHolder != null) 
                 {
-                    for(int j = regionStart; j < regionEnd; ++j)
-                    {
-                        if(arr[j].length() > maxIndexBlock)
-                        {
-                            maxIndexBlock = arr[j].length();
-                        }
-                    }
-                    maxIndexBlock = Math.min(maxIndexBlock, maxIndex);
+                    mergeHolder.setState(newMerged);
+                    mergeHasMoreThanOne = true;
                 }
                 else
-                    maxIndexBlock = maxIndex;
-                stack.addFirst(currentState.setState(regionStart, regionEnd, index + 1, maxIndexBlock));
+                {
+                    mergeHolder = toUseState.setState(newMerged);
+                }
             }
+        }
+        else
+        {
+            flushMergedIfNeeded();
+            stack.addFirst(toUseState.setState(regionStart, regionEnd, index + 1, maxIndexBlock));
+        }
+    }
+
+    private final void flushMergedIfNeeded()
+    {
+        if(mergeHolder != null)
+        {
+            stack.addFirst(advanceIndexIfNeeded(mergeHolder, !mergeHasMoreThanOne));
+            mergeHasMoreThanOne = false;
+            mergeHolder = null;
         }
     }
 
@@ -451,11 +458,11 @@ public final class MSDStringSorter
      * @param maxIndex
      * @return
      */
-    private static final int[] doSortOnPart(final String[] arr, final String[] wc,
-        final int fromIndex, final int toIndex, final int charIndex, final int maxIndex, boolean tryTrackMaxIndex, int[] maxIndexHolder)
+    private int[] doSortOnPart(final int fromIndex, final int toIndex,
+        final int charIndex, final int maxIndex, boolean tryTrackMaxIndex)
     {
         final int len = toIndex - fromIndex;
-        maxIndexHolder[0] = -1;
+        maxIndexTempTrack = -1;
         if(len <= 1) return FULLY_SORTED;
         if(len == 2)
         {
@@ -472,20 +479,23 @@ public final class MSDStringSorter
             insertionSort(arr, fromIndex, toIndex, charIndex);
             return FULLY_SORTED;
         }
-        else if(len <= MAX_ARRAYS_SORT)
+        if(len <= ARRAYS_SORT_CHECK)
         {
-            if(maxIndex - charIndex <= MAX_REMAINING_BEFORE_FULL_ARRAYS_SORT)
+            if(maxIndex - charIndex <= MAX_REMAINING_BEFORE_FULL_ARRAYS_SORT && len <= MAX_ARRAYS_FULL_SORT)
             {
                 Arrays.sort(arr, fromIndex, toIndex, new NaturalSubstringComparator(charIndex));
                 return FULLY_SORTED;
             }
-            Arrays.sort(arr, fromIndex, toIndex, new NaturalCharComparatorAtIndex(charIndex));
-            return INDEX_SORTED_NO_BUCKETS;
+            if(DO_NON_FULL_ARRAYS_SORT)
+            {
+                if(len <= MAX_ARRAYS_INDEX_SORT)
+                {
+                    Arrays.sort(arr, fromIndex, toIndex, new NaturalCharComparatorAtIndex(charIndex));
+                    return INDEX_SORTED_NO_BUCKETS;
+                }
+            }
         }
-        else
-        {
-            return bucketSort(arr, wc, fromIndex, toIndex, charIndex, tryTrackMaxIndex, maxIndexHolder);
-        }
+        return bucketSort(fromIndex, toIndex, charIndex, tryTrackMaxIndex);
     }
 
     // A couple of "conditional flag arrays" as a hack to allow a sort of
@@ -496,7 +506,7 @@ public final class MSDStringSorter
     // XXX #2 bottleneck
     // XXX Add some way to do this in the "middle" of a sort, so we don't loop through the array potentially twice
     // Basically, this needs to be merged into the comparator function somehow.
-    private static final int findSharedPrefixLen(String[] arr, int fromIndex, int toIndex,
+    private static final int findSharedPrefixLen(final String[] arr, int fromIndex, int toIndex,
         int charIndex, int maxIndex)
     {
         // It doesn't really matter which element we choose, it will give the same result
@@ -534,23 +544,24 @@ public final class MSDStringSorter
     }
     
     //Adapted from The Art of Computer Programming
+    //It's hard to see, but this sort is stable
     private final static void sortThreeItems(final String[] arr, 
         final int index1, final int index2, final int index3, final int charIndex)
     {
         assert index1 < index2;
         assert index2 < index3;
-        if(compareSubtrStartingAt(arr[index1], arr[index2], charIndex) > 0)
+        if(compareSubtrStartingAt(arr[index2], arr[index1], charIndex) < 0)
         {
             String temp = arr[index1];
-            if(compareSubtrStartingAt(arr[index2], arr[index3], charIndex) > 0)
+            if(compareSubtrStartingAt(arr[index3], arr[index2], charIndex) < 0)
             {
                 arr[index1] = arr[index3];
                 arr[index3] = temp;
             }
             else
             {
-                //compareSubtrStartingAt(arr[index1], arr[index3], charIndex) > 0
-                if(compareSubtrStartingAt(temp, arr[index3], charIndex) > 0)
+                //compareSubtrStartingAt(arr[index3], arr[index1], charIndex) < 0
+                if(compareSubtrStartingAt(arr[index3], temp, charIndex) < 0)
                 {
                     arr[index1] = arr[index2];
                     arr[index2] = arr[index3];
@@ -565,12 +576,12 @@ public final class MSDStringSorter
         }
         else
         {
-            if(compareSubtrStartingAt(arr[index2], arr[index3], charIndex) > 0)
+            if(compareSubtrStartingAt(arr[index3], arr[index2], charIndex) < 0)
             {
                 String temp = arr[index3];
                 arr[index3] = arr[index2];
-                //compareSubtrStartingAt(arr[index1], original arr[index3], charIndex) > 0
-                if(compareSubtrStartingAt(arr[index1], temp, charIndex) > 0)
+                //compareSubtrStartingAt(original arr[index3], arr[index1], charIndex) < 0
+                if(compareSubtrStartingAt(temp, arr[index1], charIndex) < 0)
                 {
                     arr[index2] = arr[index1];
                     arr[index1] = temp;
@@ -582,9 +593,10 @@ public final class MSDStringSorter
             }
         }
     }
+    
 
     private static final void
-        insertionSort(String[] arr, int fromIndex, int toIndex, int charIndex)
+        insertionSort(final String[] arr, int fromIndex, int toIndex, int charIndex)
     {
         // XXX Do a binary search when moving entries back into the correct place, but
         // take care to preserve stability
@@ -597,10 +609,14 @@ public final class MSDStringSorter
          */
     }
 
-    private static final int[] bucketSort(String[] arr, String[] wc, final int fromIndex, final int toIndex,
-        final int charIndex, boolean trackMaxLen, int[] maxIndexHolder)
+    private final int[] bucketSort(final int fromIndex, final int toIndex,
+        final int charIndex, boolean trackMaxLen)
     {
         final int len = toIndex - fromIndex;
+        @SuppressWarnings("hiding") //We are trying to shift from a instance member lookup to a local variable lookup for performance 
+        final String[] arr = this.arr;
+        @SuppressWarnings("hiding") //We are trying to shift from a instance member lookup to a local variable lookup for performance
+        final String[] wc = this.wc;
         // This will grow as needed
         // Default size should hold the standard ANSI charset
         int[] charCountBuffer = new int[0xFF];
@@ -614,16 +630,15 @@ public final class MSDStringSorter
             // Count how often each character appears
             for(int i = fromIndex; i < toIndex; ++i)
             {
-                if(arr[i].length() > maxSeenSize)
-                    maxSeenSize = arr[i].length();
                 final char c = charAt(arr[i], charIndex);
                 final int cAsInt = c;
                 if(cAsInt < minCharSeen) minCharSeen = cAsInt;
                 if(cAsInt > maxCharSeen) maxCharSeen = cAsInt;
                 charCountBuffer = com.google.common.primitives.Ints.ensureCapacity(charCountBuffer, cAsInt, 20);
                 ++charCountBuffer[cAsInt];
+                if(arr[i].length() > maxSeenSize) maxSeenSize = arr[i].length();
             }
-            maxIndexHolder[0] = maxSeenSize;
+            maxIndexTempTrack = maxSeenSize;
         }
         else
         {
@@ -637,7 +652,7 @@ public final class MSDStringSorter
                 charCountBuffer = com.google.common.primitives.Ints.ensureCapacity(charCountBuffer, cAsInt, 20);
                 ++charCountBuffer[cAsInt];
             }
-            maxIndexHolder[0] = -1;
+            maxIndexTempTrack = -1;
         }
 
         if(minCharSeen == maxCharSeen)
@@ -798,8 +813,10 @@ public final class MSDStringSorter
         int end;
         int index;
         int maxIndex;
+        
+        SortState(){} //Don't really care what the initial values are in this case
 
-        public SortState(int start, int end, int index, int maxIndex)
+        SortState(int start, int end, int index, int maxIndex)
         {
             this.start = start;
             this.end = end;
@@ -807,7 +824,7 @@ public final class MSDStringSorter
             this.maxIndex = maxIndex;
         }
         
-        public SortState(SortState otherState)
+        SortState(SortState otherState)
         {
             this.start = otherState.start;
             this.end = otherState.end;
@@ -815,13 +832,6 @@ public final class MSDStringSorter
             this.maxIndex = otherState.maxIndex;
         }
         
-        public static final SortState getOrSetState(SortState existing, SortState otherState)
-        {
-            if(existing == null)
-                return new SortState(otherState);
-            return existing.setState(otherState);
-        }
-
         public SortState setState(int start, int end, int index, int maxIndex)
         {
             this.start = start;
@@ -878,7 +888,7 @@ public final class MSDStringSorter
          * Attempts to merge two adjacent ranges over the same indexes, returns null if it cannot.
          * The object will be untouched if the merged could not be done.
          * 
-         * @param other
+         * @param other the other state to merge with
          * @return this (which is now merged with other), or {@literal null} if it cannot merge.
          */
         public SortState mergeWith(SortState other)
@@ -900,14 +910,16 @@ public final class MSDStringSorter
 
     }
 
-    private static final int NUM_TIMES_WARMUP = 200;
-    private static final int NUM_TIMES_RUN_SORT = 1000;
+    private static final int NUM_TIMES_WARMUP = 100;
+    private static final int NUM_TIMES_RUN_SORT = 200;
     private static final int MAX_NUM_TO_PRINT = 1000;
 
-    private static final int TIME_TO_PAUSE_AFTER_WARMUP = 8;
+    private static final int TIME_TO_PAUSE_AFTER_WARMUP = 30;
     private static final int INDEX_TO_PART_SORT_TO = 21;
+    
+    private static final boolean ONLY_MSD_SORT = true;
 
-    public static void main(String... args) throws IOException, InterruptedException
+    public static void main(String... args) throws java.io.IOException, InterruptedException
     {
         // System.err.println("Pausing for 30 seconds");
         // Thread.sleep(30000);
@@ -919,13 +931,10 @@ public final class MSDStringSorter
             .toArray(new String[0]);
         //String[] test = org.apache.commons.io.IOUtils.readLines(MSDStringSorter.class.getResourceAsStream("README")).toArray(new String[0]);
         //String[] test = toArrayString(Arrays.class.getDeclaredMethods());
-        //java.util.Collections.shuffle(Arrays.asList(test));
+        java.util.Collections.shuffle(Arrays.asList(test));
         //String[] test = new String[5000];
         //Arrays.fill(test, "");
         System.err.println("Dataset is: " + test.length + " entries long");
-        
-        final Comparator<String> compWith = 
-            new NaturalSubstringComparator(INDEX_TO_PART_SORT_TO);
         
         for(String s : test)
         {
@@ -946,7 +955,7 @@ public final class MSDStringSorter
             Arrays.sort(test.clone());
             String[] testClone = test.clone();
             sortPartially(INDEX_TO_PART_SORT_TO, testClone);
-            Arrays.sort(testClone, compWith);
+            Arrays.sort(testClone);
         }
 
         // Alright, clean up, and pause
@@ -957,83 +966,111 @@ public final class MSDStringSorter
 
         String[] test2 = test.clone();
         String[] test3 = test.clone();
+        
+        long startTime;
+        long endTime;
+        long msdSortTime = 0; 
 
         System.err.println("Starting MSD sort test");
         if(test.length < MAX_NUM_TO_PRINT) System.out.println(Arrays.toString(test));
-        long startTime = System.nanoTime();
         for(int i = 0; i < NUM_TIMES_RUN_SORT - 1; ++i)
         {
+            startTime = System.nanoTime();
             sort(test.clone());
+            endTime = System.nanoTime();
+            msdSortTime += endTime - startTime;
+            System.gc();
         }
+        startTime = System.nanoTime();
         sort(test);
-        long endTime = System.nanoTime();
+        endTime = System.nanoTime();
 
-        long msdSortTime = endTime - startTime;
+        msdSortTime += endTime - startTime;
 
         System.err.println("Finished MSD sort test");
-        System.gc();
-        System.err.println("Starting Arrays.sort test");
+        
+        long arraysSortTime = 0;
+        long partialSortTime = 0;
+        
+        if(!ONLY_MSD_SORT)
+        {
+            System.gc();
+            System.err.println("Starting Arrays.sort test");
+    
 
-        startTime = System.nanoTime();
-        for(int i = 0; i < NUM_TIMES_RUN_SORT - 1; ++i)
-        {
-            Arrays.sort(test2.clone());
-        }
-        Arrays.sort(test2);
-        endTime = System.nanoTime();
-        
-        long arraysSortTime = endTime - startTime;
-        
-        System.err.println("Finished Arrays.sort test");
-        System.gc();
-        System.err.println("Starting partial sort to Arrays.sort test");
-        
-        startTime = System.nanoTime();
-        for(int i = 0; i < NUM_TIMES_RUN_SORT - 1; ++i)
-        {
-            String[] test3Clone = test3.clone();
-            sortPartially(INDEX_TO_PART_SORT_TO, test3Clone);
-            Arrays.sort(test3Clone, compWith);
-        }
-        sortPartially(INDEX_TO_PART_SORT_TO, test3);
-        Arrays.sort(test3, compWith);
-        endTime = System.nanoTime();
-        System.err.println("Finished partial sort to Arrays.sort test");
-        
-        long partialSortTime = endTime - startTime;
-     
-        if(test.length < MAX_NUM_TO_PRINT)
-        {
-            System.out.println(Arrays.toString(test));
-            System.out.println(Arrays.toString(test2));
-            System.out.println(Arrays.toString(test3));
-        }
-        boolean matchedUp = Arrays.equals(test, test2);
-        if(!matchedUp)
-        {
-            System.err.println("Sort mismatch: full MSD sort");
-            int misMatchIndex = findDiffIndex(test, test2);
-            System.err.println("@" + misMatchIndex + ": \"" + test[misMatchIndex] + "\" != \"" +
-                test2[misMatchIndex] + '"');
-        }
-        
-        matchedUp = Arrays.equals(test3, test2);
-        if(!matchedUp)
-        {
-            System.err.println("Sort mismatch: partial MSD sort");
-            int misMatchIndex = findDiffIndex(test3, test2);
-            System.err.println("@" + misMatchIndex + ": \"" + test3[misMatchIndex] + "\" != \"" +
-                test2[misMatchIndex] + '"');
+            for(int i = 0; i < NUM_TIMES_RUN_SORT - 1; ++i)
+            {
+                startTime = System.nanoTime();
+                Arrays.sort(test2.clone());
+                endTime = System.nanoTime();
+                arraysSortTime += endTime - startTime;
+                System.gc();
+            }
+            startTime = System.nanoTime();
+            Arrays.sort(test2);
+            endTime = System.nanoTime();
+            arraysSortTime += endTime - startTime;
+            
+            System.err.println("Finished Arrays.sort test");
+            System.gc();
+            System.err.println("Starting partial sort to Arrays.sort test");
+            
+            for(int i = 0; i < NUM_TIMES_RUN_SORT - 1; ++i)
+            {
+                String[] test3Clone = test3.clone();
+                startTime = System.nanoTime();
+                sortPartially(INDEX_TO_PART_SORT_TO, test3Clone);
+                Arrays.sort(test3Clone);
+                endTime = System.nanoTime();
+                partialSortTime += endTime - startTime;
+                System.gc();
+            }
+            startTime = System.nanoTime();
+            sortPartially(INDEX_TO_PART_SORT_TO, test3);
+            Arrays.sort(test3);
+            endTime = System.nanoTime();
+            partialSortTime += endTime - startTime;
+            System.err.println("Finished partial sort to Arrays.sort test");
+         
+            if(test.length < MAX_NUM_TO_PRINT)
+            {
+                System.out.println(Arrays.toString(test));
+                System.out.println(Arrays.toString(test2));
+                System.out.println(Arrays.toString(test3));
+            }
+            boolean matchedUp = Arrays.equals(test, test2);
+            if(!matchedUp)
+            {
+                System.err.println("Sort mismatch: full MSD sort");
+                int misMatchIndex = findDiffIndex(test, test2);
+                System.err.println("@" + misMatchIndex + ": \"" + test[misMatchIndex] + "\" != \"" +
+                    test2[misMatchIndex] + '"');
+            }
+            
+            matchedUp = Arrays.equals(test3, test2);
+            if(!matchedUp)
+            {
+                System.err.println("Sort mismatch: partial MSD sort");
+                int misMatchIndex = findDiffIndex(test3, test2);
+                System.err.println("@" + misMatchIndex + ": \"" + test3[misMatchIndex] + "\" != \"" +
+                    test2[misMatchIndex] + '"');
+            }
         }
 
         System.out.println("MSD sort, total:" + msdSortTime / 1000000 + ", average: " +
             ((double)msdSortTime / NUM_TIMES_RUN_SORT) / 1000000);
-        System.out.println("Arrays.sort sort, total:" + arraysSortTime / 1000000 + ", average: " +
-            ((double)arraysSortTime / NUM_TIMES_RUN_SORT) / 1000000);
-        System.out.println("Partial sort to Arrays.sort, total:" + partialSortTime / 1000000 + ", average: " +
-            ((double)partialSortTime / NUM_TIMES_RUN_SORT) / 1000000);
+        if(!ONLY_MSD_SORT)
+        {
+            System.out.println("Arrays.sort sort, total:" + arraysSortTime / 1000000 + ", average: " +
+                ((double)arraysSortTime / NUM_TIMES_RUN_SORT) / 1000000);
+            System.out.println("Partial sort to Arrays.sort, total:" + partialSortTime / 1000000 + ", average: " +
+                ((double)partialSortTime / NUM_TIMES_RUN_SORT) / 1000000);
+        }
+        
+        Thread.sleep(TIME_TO_PAUSE_AFTER_WARMUP * 1000);
     }
 
+    @SuppressWarnings("unused")
     private static String[] toArrayString(Object[] array)
     {
         if(array instanceof String[]) return (String[])array.clone();
