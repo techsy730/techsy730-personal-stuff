@@ -28,16 +28,18 @@ public final class MSDStringSorter
     //then we have to loop through that segment AGAIN to find the next layer of "chunks".
     //Thus, this needs to be kept somewhat low.
     //But not too low, as MSD sorting does involve a lot of overhead
-    private static final int MAX_ARRAYS_INDEX_SORT = 75;
-    private static final int MAX_ARRAYS_FULL_SORT = 60;
+    private static final int MAX_ARRAYS_INDEX_SORT = 50;
+    private static final int MAX_ARRAYS_FULL_SORT = 40;
     
     @SuppressWarnings("unused") //One of these cases will always be marked as "dead"
     private static final int ARRAYS_SORT_CHECK = (MAX_ARRAYS_FULL_SORT > MAX_ARRAYS_INDEX_SORT) ? MAX_ARRAYS_FULL_SORT : MAX_ARRAYS_INDEX_SORT;
     
     //This causes a few extra loops to be run, and makes other loops gain extra operations, thus keep it somewhat low
     //However, the savings from a correctly computed max length can be rather large, so thus you don't need to be too conservative with it.
-    //@Assert("<= 120")
-    private static final int MAX_UPDATE_MAX_LENGTH = (int)(ARRAYS_SORT_CHECK * 1.4);
+    private static final int _MAX_UPDATE_MAX_LENGTH_COMPUTE = (int)(ARRAYS_SORT_CHECK * 2.2);
+    private static final int _MAX_MAX_UPDATE_MAX_LENGTH = 120;
+    @SuppressWarnings("unused") //One of these cases will always be marked as "dead"
+    private static final int MAX_UPDATE_MAX_LENGTH = _MAX_UPDATE_MAX_LENGTH_COMPUTE > _MAX_MAX_UPDATE_MAX_LENGTH ? _MAX_MAX_UPDATE_MAX_LENGTH : _MAX_UPDATE_MAX_LENGTH_COMPUTE;
     
     //Set this to the minimum that there isn't a specific n-way sort method for.
     private static final int MIN_BLOCK_LEN_TO_MERGE = 4;
@@ -46,7 +48,7 @@ public final class MSDStringSorter
     private static final int MIN_BINARY_SEARCH = 26;
     
     //If this is false, then bucket sort will be used even if length < MAX_ARRAYS_INDEX_SORT but not close enough to the end to trigger a full sort
-    //(Except for length < MAX_INSERTION_SORT, which will always fully sort 
+    //(Except for length < MAX_INSERTION_SORT, which will always fully sort)
     private static final boolean DO_NON_FULL_ARRAYS_SORT = true;
 
     // For these two values, SMALLER numbers mean MORE hesistant to trigger the optimization
@@ -242,7 +244,15 @@ public final class MSDStringSorter
         {
             if(curChar == charAt(arr[end - 1], index))
             {
-                handleSingleBlockCase(start, end, index, maxIndex, curChar, currentState);
+                if(curChar != '\0')
+                {
+                    // Common case, all the characters at this level were the same, just
+                    // immediately move on
+                    final int sharedPrefixLen = findSharedPrefixLen(arr, start, end, index + 1, maxIndex);
+                    // Shared prefix length might be zero if all of them are them are shorter
+                    // than the current index
+                    stack.addFirst(currentState.setState(start, end, index + sharedPrefixLen + 1, maxIndex));
+                }
             }
             else
             {
@@ -254,32 +264,8 @@ public final class MSDStringSorter
                     splitByCharGroups(start, end, index, maxIndex, buckets, currentState, needMaxIndexUpdate);
             }
         }
-        else
-            assert index >= maxIndex; // This is just here for a nice breakpoint
     }
     
-    private static final int guessMaxLength(final String[] arr, final int start, final int end)
-    {
-        return Math.max(Math.max(arr[start].length(), arr[end - 1].length()), arr[(end + start) >> 1].length());
-    }
-
-    private void handleSingleBlockCase(final int start, final int end, final int index,
-        final int maxIndex, final char curChar, SortState currentState)
-    {
-        if(curChar != '\0')
-        {
-            // Common case, all the characters at this level were the same, just
-            // immediately move on
-            final int sharedPrefixLen = findSharedPrefixLen(arr, start, end, index + 1, maxIndex);
-            // Shared prefix length might be zero if all of them are them are shorter
-            // than the current index
-            stack.addFirst(currentState.setState(start, end, index + sharedPrefixLen + 1, maxIndex));
-            return;
-        }
-        //else
-        //All of them were the null char, which is a sign that all of them are past the string size
-    }
-
     private void splitByCharGroups(final int start,
         final int end, final int index, final int maxIndex, final char curChar, SortState currentState, final boolean updateMaxSize)
     {
@@ -493,25 +479,19 @@ public final class MSDStringSorter
         int maxIndexBlock;
         if(updateMaxSize && newSize > maxMergedRangeSize)
         {
-            maxIndexBlock = tryFindMaxIndexBlock(regionStart, regionEnd, maxIndex);
+            assert regionEnd > regionStart;
+            @SuppressWarnings("hiding") //We are trying to shift from a instance member lookup to a local variable lookup for performance 
+            final String[] arr = this.arr;
+            int maxIndexBlock1 = -1;
+            for(int i = regionStart; i < regionEnd; ++i)
+            {
+                maxIndexBlock1 = arr[i].length() > maxIndexBlock1 ? arr[i].length() : maxIndexBlock1;
+            }
+            maxIndexBlock = Math.min(maxIndexBlock1, maxIndex);
         }
         else
             maxIndexBlock = maxIndex;
         return maxIndexBlock;
-    }
-
-    private final int tryFindMaxIndexBlock(final int regionStart, final int regionEnd, final int maxIndex)
-    {
-        if(regionStart >= regionEnd)
-            return maxIndex;
-        @SuppressWarnings("hiding") //We are trying to shift from a instance member lookup to a local variable lookup for performance 
-        final String[] arr = this.arr;
-        int maxIndexBlock = -1;
-        for(int i = regionStart; i < regionEnd; ++i)
-        {
-            maxIndexBlock = arr[i].length() > maxIndexBlock ? arr[i].length() : maxIndexBlock;
-        }
-        return Math.min(maxIndexBlock, maxIndex);
     }
 
     private final void
@@ -648,7 +628,7 @@ public final class MSDStringSorter
     private static final java.util.Comparator<String> getRemainingCharSortComparator(final String[] arr, final int fromIndex,
         final int toIndex, final int charIndex, final int maxIndex)
     {
-        final int maxIndexRealGuess = guessMaxLength(arr, fromIndex, toIndex);
+        final int maxIndexRealGuess = Math.max(Math.max(arr[fromIndex].length(), arr[toIndex - 1].length()), arr[(toIndex + fromIndex) >> 1].length());
         return maxIndexRealGuess - maxIndex > MAX_DIFF_BETWEEN_MAX_INDEX_GUESS_AND_REAL_MAX ?
             new NaturalSubstringComparator(charIndex, maxIndex) :
             new NaturalSuffixComparator(charIndex);
@@ -695,8 +675,11 @@ public final class MSDStringSorter
         final int index1, final int index2, final int charIndex)
     {
         assert index1 < index2;
-        if(compareSubtrStartingAt(arr[index1], arr[index2], charIndex) > 0)
-            exchange(arr, index1, index2);
+        if(compareSubtrStartingAt(arr[index1], arr[index2], charIndex) > 0) {
+            String temp = arr[index1];
+            arr[index1] = arr[index2];
+            arr[index2] = temp;
+        }
     }
     
     //Adapted from The Art of Computer Programming
@@ -856,13 +839,6 @@ public final class MSDStringSorter
         return indexesOrig;
     }
 
-    private static final void exchange(Object[] arr, final int index1, final int index2)
-    {
-        Object temp = arr[index1];
-        arr[index1] = arr[index2];
-        arr[index2] = temp;
-    }
-
     private static final boolean checkBounds(int length, int fromIndex, int toIndex)
     {
         if(fromIndex < 0) throw new ArrayIndexOutOfBoundsException(fromIndex + " < 0");
@@ -939,7 +915,7 @@ public final class MSDStringSorter
     // sub-problem.
     // Mutable to help reduce the number of allocations needed.
     // XXX Yea, allocating these is not as cheap as I was hoping for
-    // Some moderate speedup can be had if I am willing to track ranges without having to
+    // Some moderate speedup can be had if I can manage to track ranges without having to
     // resort to this
     private static final class SortState implements Cloneable
     {
