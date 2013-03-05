@@ -22,14 +22,14 @@ public final class MSDStringSorter
     //This number was chosen based on some extremely rough "back of the envelope" theoritcal calculations and verfied loosly
     //to be decent with very non-rigourous tests.
     //The advantage is that once a chunk gets sorted by this, that chunk will never have to be looked at again.
-    private static final int MAX_INSERTION_SORT = 24;
+    private static final int MAX_INSERTION_SORT = 16;
     //Set to MAX_INSERTION_SORT to effectively disable this optimization
     //NOTE Keep in mind, if the Arrays.sort only on the current index is used
     //then we have to loop through that segment AGAIN to find the next layer of "chunks".
     //Thus, this needs to be kept somewhat low.
     //But not too low, as MSD sorting does involve a lot of overhead
-    private static final int MAX_ARRAYS_INDEX_SORT = 50;
-    private static final int MAX_ARRAYS_FULL_SORT = 40;
+    private static final int MAX_ARRAYS_INDEX_SORT = 51;
+    private static final int MAX_ARRAYS_FULL_SORT = 59;
     
     @SuppressWarnings("unused") //One of these cases will always be marked as "dead"
     private static final int ARRAYS_SORT_CHECK = (MAX_ARRAYS_FULL_SORT > MAX_ARRAYS_INDEX_SORT) ? MAX_ARRAYS_FULL_SORT : MAX_ARRAYS_INDEX_SORT;
@@ -53,10 +53,10 @@ public final class MSDStringSorter
 
     // For these two values, SMALLER numbers mean MORE hesistant to trigger the optimization
     //Merging is a rather expensive operation, just to save a few method calls. Thus, be conservative with this number. 
-    private static final int MAX_REMAINING_BEFORE_MERGING_RANGES = 3;
+    private static final int MAX_REMAINING_BEFORE_MERGING_RANGES = 2;
     //Be conservative with this number, as not only will it trigger more aggressive merges, but also cause a non-insertion call to
     //arrays sort to look at all of the remaining characters, which could get expensive.
-    private static final int MAX_REMAINING_BEFORE_FULL_ARRAYS_SORT = 15;
+    private static final int MAX_REMAINING_BEFORE_FULL_ARRAYS_SORT = 4;
     
     private static final int MAX_DIFF_BETWEEN_MAX_INDEX_GUESS_AND_REAL_MAX = 30;
     
@@ -773,15 +773,14 @@ public final class MSDStringSorter
             for(int i = fromIndex; i < toIndex; ++i)
             {
                 final char c = charAt(arr[i], charIndex);
-                final int cAsInt = c;
-                minCharSeen = cAsInt < minCharSeen ? cAsInt :  minCharSeen;
-                if(cAsInt > maxCharSeen)
+                minCharSeen = c < minCharSeen ? c :  minCharSeen;
+                if(c > maxCharSeen)
                 {
-                    maxCharSeen = cAsInt;
-                    charCountBuffer = (charCountBuffer.length < cAsInt) ?
-                        Arrays.copyOf(charCountBuffer, cAsInt + 0x0F) : charCountBuffer;
+                    maxCharSeen = c;
+                    charCountBuffer = (charCountBuffer.length < c) ?
+                        Arrays.copyOf(charCountBuffer, c + 0x1F) : charCountBuffer;
                 }
-                ++charCountBuffer[cAsInt];
+                ++charCountBuffer[c];
                 if(arr[i].length() > maxSeenSize) maxSeenSize = arr[i].length();
             }
             maxIndexTempTrack = maxSeenSize;
@@ -792,15 +791,14 @@ public final class MSDStringSorter
             for(int i = fromIndex; i < toIndex; ++i)
             {
                 final char c = charAt(arr[i], charIndex);
-                final int cAsInt = c;
-                minCharSeen = cAsInt < minCharSeen ? cAsInt :  minCharSeen;
-                if(cAsInt > maxCharSeen)
+                minCharSeen = c < minCharSeen ? c :  minCharSeen;
+                if(c > maxCharSeen)
                 {
-                    maxCharSeen = cAsInt;
-                    charCountBuffer = (charCountBuffer.length < cAsInt) ?
-                        Arrays.copyOf(charCountBuffer, cAsInt + 0x0F) : charCountBuffer;
+                    maxCharSeen = c;
+                    charCountBuffer = (charCountBuffer.length < c) ?
+                        Arrays.copyOf(charCountBuffer, c + 0x1F) : charCountBuffer;
                 }
-                ++charCountBuffer[cAsInt];
+                ++charCountBuffer[c];
             }
             maxIndexTempTrack = -1;
         }
