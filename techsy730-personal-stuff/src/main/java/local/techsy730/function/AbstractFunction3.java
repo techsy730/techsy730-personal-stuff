@@ -13,7 +13,7 @@ public abstract class AbstractFunction3<R, T1, T2, T3> extends AbstractFunctionB
             new AbstractFunction2<R, T2, T3>()
             {
                 @Override
-                public R call(T2 arg2, T3 arg3)
+                public final R call(T2 arg2, T3 arg3)
                 {
                     return AbstractFunction3.this.call(argument, arg2, arg3);
                 }
@@ -27,7 +27,7 @@ public abstract class AbstractFunction3<R, T1, T2, T3> extends AbstractFunctionB
             new AbstractFunction2<R, T1, T3>()
             {
                 @Override
-                public R call(T1 arg1, T3 arg3)
+                public final R call(T1 arg1, T3 arg3)
                 {
                     return AbstractFunction3.this.call(arg1, argument, arg3);
                 }
@@ -42,7 +42,7 @@ public abstract class AbstractFunction3<R, T1, T2, T3> extends AbstractFunctionB
             new AbstractFunction2<R, T1, T2>()
             {
                 @Override
-                public R call(T1 arg1, T2 arg2)
+                public final R call(T1 arg1, T2 arg2)
                 {
                     return AbstractFunction3.this.call(arg1, arg2, argument);
                 }

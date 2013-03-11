@@ -13,7 +13,7 @@ public abstract class AbstractFunction1<R, T> extends AbstractFunctionBase<R, T>
             new AbstractFunction0<R>()
             {
                 @Override
-                public R call()
+                public final R call()
                 {
                     return AbstractFunction1.this.call(argument);
                 }
@@ -34,6 +34,7 @@ public abstract class AbstractFunction1<R, T> extends AbstractFunctionBase<R, T>
     }
     
     @Override
+    //We can take a shortcut over the general purpose "unpacking" logic in this case
     public R callRoot(T argument)
     {
         if(argument instanceof ParameterPair)

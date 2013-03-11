@@ -3,7 +3,7 @@ package local.techsy730.function;
 /**
  * A skeletal implementation for function types.
  * This class defines {@link #callRoot(Object) callRoot(T)} on top of its {@link #callUnsafe(Object...) callUnsafe(Object...)}
- * function, due to {@link #callUnsafe(Object...) callUnsafe(Object...)} being more intuitive to implement.
+ * function, due to {@link #callUnsafe(Object...) callUnsafe(Object...)} being easier and more intuitive to implement, despite it's lack of compile time type safety
  * @author C. Sean Young
  *
  * @param <R> {@inheritDoc}

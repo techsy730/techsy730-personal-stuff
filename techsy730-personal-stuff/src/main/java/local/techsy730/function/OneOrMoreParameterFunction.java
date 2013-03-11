@@ -4,5 +4,5 @@ public interface OneOrMoreParameterFunction<R, FirstType, AggregateWithNoFirstTy
     Bound1stFunctionType extends FunctionBase<R, AggregateWithNoFirstType>>
     extends FunctionBase<R, AggregateType>
 {
-    public Bound1stFunctionType bind1(FirstType argument);
+    public Bound1stFunctionType bind1(final FirstType argument);
 }

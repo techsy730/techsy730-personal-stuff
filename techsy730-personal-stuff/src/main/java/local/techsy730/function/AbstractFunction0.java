@@ -2,14 +2,14 @@ package local.techsy730.function;
 
 public abstract class AbstractFunction0<R> extends AbstractFunctionBase<R, Void> implements Function0<R>
 {
-
+    @Override
+    public abstract R call();
+    
     @Override
     public final int getArgumentCount()
     {
         return 0;
     }
-
-    //public abstract R call();
 
     @Override
     public R callUnsafe(Object... arguments)
@@ -21,6 +21,7 @@ public abstract class AbstractFunction0<R> extends AbstractFunctionBase<R, Void>
     }
     
     @Override
+    //We can take a shortcut over the general purpose "unpacking" logic in this case
     public R callRoot(Void argument)
     {
         if(argument != null)
