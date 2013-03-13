@@ -20,7 +20,7 @@ package local.techsy730.function;
  *              If T is left as a raw type OR if it is declared to be an Object due to its type not being knowable until runtime,
  *              then T is not considered well defined at compile time. 
  */
-public interface FunctionBase<R, T>
+public interface FunctionBase<R, T> extends FunctionTypeWithR<R>
 {
     
     /**
@@ -39,7 +39,18 @@ public interface FunctionBase<R, T>
      * 
      * @return the number of arguments this function takes.
      */
-    public int getArgumentCount();    
+    public int getArgumentCount();
+    
+    /**
+     * Returns the runtime type that all return values from this function are assured to be an instance of.
+     * If this information is not knowable at runtime, it is fine to just return {@code Object.class}.
+     * @return the runtime type that all return values from this function are assured to be an instance of.
+     */
+    public Class<?> returnType();
+    
+    public Class<?> getArgumentType(int argument);
+    
+    public Class<?>[] getArgumentTypes();
     
     /**
      * Calls the function with the argument(s) given, packed into ArgumentPairs if needed.<p />

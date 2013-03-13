@@ -1,7 +1,7 @@
 package local.techsy730.function;
 
 public abstract class AbstractFunction1<R, T> extends AbstractFunctionBase<R, T>
-    implements Function1<R, T>
+    implements Function1<R, T>, FunctionTypeWithR<R>
 {
     @Override
     public abstract R call(T arg);
@@ -16,6 +16,12 @@ public abstract class AbstractFunction1<R, T> extends AbstractFunctionBase<R, T>
                 public final R call()
                 {
                     return AbstractFunction1.this.call(argument);
+                }
+                
+                @Override
+                public final Class<?> returnType()
+                {
+                    return AbstractFunction1.this.returnType();
                 }
             };
     }

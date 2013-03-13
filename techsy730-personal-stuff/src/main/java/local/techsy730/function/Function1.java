@@ -6,7 +6,7 @@ public interface Function1<R, T>
             Void, //AggregateWithNoFirstType
             T, //AggregateType
             Function0<R>>, //Bound1stFunctionType
-        FunctionBase<R, T>
+        FunctionBase<R, T>, FunctionN, FunctionTypeWithR<R>
 {
     public R call(T arg);
     

@@ -10,7 +10,7 @@ public interface Function2<R, T1, T2>
             Function0<R>, //Bound1stAnd2ndType
             Function1<R, T2>, //Bound1stFunctionType
             Function1<R, T1>>, //Bound2ndFunctionType
-        FunctionBase<R, ParameterPair<T1, T2>>
+        FunctionBase<R, ParameterPair<T1, T2>>, FunctionN, FunctionTypeWithR<R>
 {
     public R call(T1 arg1, T2 arg2);
     

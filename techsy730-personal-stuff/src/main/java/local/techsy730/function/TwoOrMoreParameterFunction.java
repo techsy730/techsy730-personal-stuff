@@ -15,7 +15,8 @@ public interface TwoOrMoreParameterFunction<R, FirstType, SecondType,
     extends 
         OneOrMoreParameterFunction<R,
             FirstType, AggregateWithNoFirstType, AggregateType, Bound1stFunctionType>,
-            FunctionBase<R, AggregateType>
+            FunctionBase<R, AggregateType>,
+        FunctionTypeWithR<R>
 {
     public Bound2ndFunctionType bind2(final SecondType argument);
 }

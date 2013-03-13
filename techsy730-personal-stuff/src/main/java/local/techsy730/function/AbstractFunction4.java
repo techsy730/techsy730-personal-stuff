@@ -3,7 +3,7 @@ package local.techsy730.function;
 //TODO Write a code generator for this, as it is getting rather absurd to do all this by hand
 public abstract class AbstractFunction4<R, T1, T2, T3, T4>
     extends AbstractFunctionBase<R, ParameterPair<T1, ParameterPair<T2, ParameterPair<T3, T4>>>>
-    implements Function4<R, T1, T2, T3, T4>
+    implements Function4<R, T1, T2, T3, T4>, FunctionTypeWithR<R>
 {
     @Override
     public abstract R call(T1 arg1, T2 arg2, T3 arg3, T4 arg4);
@@ -19,6 +19,12 @@ public abstract class AbstractFunction4<R, T1, T2, T3, T4>
                 {
                     return AbstractFunction4.this.call(argument, arg2, arg3, arg4);
                 }
+                
+                @Override
+                public final Class<?> returnType()
+                {
+                    return AbstractFunction4.this.returnType();
+                }
             };
     }
 
@@ -32,6 +38,12 @@ public abstract class AbstractFunction4<R, T1, T2, T3, T4>
                 public final R call(T1 arg1, T3 arg3, T4 arg4)
                 {
                     return AbstractFunction4.this.call(arg1, argument, arg3, arg4);
+                }
+                
+                @Override
+                public final Class<?> returnType()
+                {
+                    return AbstractFunction4.this.returnType();
                 }
             };
     }
@@ -47,6 +59,12 @@ public abstract class AbstractFunction4<R, T1, T2, T3, T4>
                 {
                     return AbstractFunction4.this.call(arg1, arg2, argument, arg4);
                 }
+                
+                @Override
+                public final Class<?> returnType()
+                {
+                    return AbstractFunction4.this.returnType();
+                }
             };
     }
 
@@ -60,6 +78,12 @@ public abstract class AbstractFunction4<R, T1, T2, T3, T4>
                 public final R call(T1 arg1, T2 arg2, T3 arg3)
                 {
                     return AbstractFunction4.this.call(arg1, arg2, arg3, argument);
+                }
+                
+                @Override
+                public final Class<?> returnType()
+                {
+                    return AbstractFunction4.this.returnType();
                 }
             };
     }

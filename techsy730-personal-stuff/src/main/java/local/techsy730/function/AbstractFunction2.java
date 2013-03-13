@@ -1,7 +1,7 @@
 package local.techsy730.function;
 
 public abstract class AbstractFunction2<R, T1, T2> extends AbstractFunctionBase<R, ParameterPair<T1, T2>>
-    implements Function2<R, T1, T2>
+    implements Function2<R, T1, T2>, FunctionTypeWithR<R>
 {
     @Override
     public abstract R call(T1 arg1, T2 arg2);
@@ -23,6 +23,12 @@ public abstract class AbstractFunction2<R, T1, T2> extends AbstractFunctionBase<
                 {
                     return AbstractFunction2.this.call(argument, arg);
                 }
+                
+                @Override
+                public final Class<?> returnType()
+                {
+                    return AbstractFunction2.this.returnType();
+                }
             };
     }
     
@@ -43,6 +49,12 @@ public abstract class AbstractFunction2<R, T1, T2> extends AbstractFunctionBase<
                 {
                     return AbstractFunction2.this.call(arg, argument);
                 }
+                
+                @Override
+                public final Class<?> returnType()
+                {
+                    return AbstractFunction2.this.returnType();
+                }
             };
     }
     
@@ -61,6 +73,12 @@ public abstract class AbstractFunction2<R, T1, T2> extends AbstractFunctionBase<
         public R call()
         {
             return AbstractFunction2.this.call(arg1, arg2);
+        }
+        
+        @Override
+        public final Class<?> returnType()
+        {
+            return AbstractFunction2.this.returnType();
         }
     }
 
