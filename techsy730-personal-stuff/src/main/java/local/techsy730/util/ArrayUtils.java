@@ -120,6 +120,8 @@ public class ArrayUtils
 	 * @param type the runtime type of the array to be returned
 	 * @return a possibly cached array of 0 size with the component type being the class type given
 	 * @throws IllegalArgumentException if the given type is a {@link Class#isPrimitive() primitive type}
+	 *                                  or is {@link Void#TYPE}
+	 * @throws NullPointerException if the given type was null
 	 */
 	@SuppressWarnings("unchecked")
 	public static final <T> T[] getEmptyObjectArray(Class<T> type)
@@ -134,6 +136,7 @@ public class ArrayUtils
      * @param type the runtime type of the array to be returned
      * @return a possibly cached array of 0 size with the component type being the class type given
      * @throws IllegalArgumentException if the given type is {@link Void#TYPE}
+     * @throws NullPointerException if the given type was null
      */
 	public static final Object getEmptyArray(Class<?> type)
 	{

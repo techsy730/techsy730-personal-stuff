@@ -130,6 +130,8 @@ public final class MSDStringSorter
     private boolean mergeHasMoreThanOne = false;
     private int maxIndexTempTrack = -1;
     
+    private int maxCharValueSeen = DEFAULT_CHAR_STORAGE_PRE_ALLOC;
+    
     /**
      * A wrapper method, returning '\0' instead of throwing an exception for out of bounds. Cleanly handles the case of
      * mismatching string lengths.
@@ -582,6 +584,7 @@ public final class MSDStringSorter
     private int[] doSortOnPart(final int fromIndex, final int toIndex,
         final int charIndex, final int maxIndex, final boolean tryTrackMaxIndex)
     {
+        //Note The SortState is not given for from, to, etc, but rather for updating the max seen character
         final int len = toIndex - fromIndex;
         maxIndexTempTrack = -1;
         switch(len) 
@@ -757,20 +760,63 @@ public final class MSDStringSorter
          * arr[j-1], charIndex) < 0; --j) exchange(arr, j, j-1);
          */
     }
+    
+    // Default size should hold the standard ANSI charset
+    private static final int DEFAULT_CHAR_STORAGE_PRE_ALLOC = 0x7F;
+    
+    private static final int CHAR_STORAGE_PRE_ALLOC_ANSI = 0xFF;
+    
+    //Big enough to hold most of the fancy "script" characters used in Chinese, Japanese, etc.
+    private static final int MAX_CHAR_STORAGE_PRE_ALLOC = 0x2FA1F; 
+    
+    private static final int getNewUpdateSize(final int old, final int maxSeen)
+    {
+        int toReturn = maxSeen;
+        //Never shrink below DEFAULT_CHAR_STORAGE_PRE_ALLOC
+        if(old >= DEFAULT_CHAR_STORAGE_PRE_ALLOC)
+        {
+            if(old == toReturn)
+            {
+                return old;
+            }
+            if(toReturn < DEFAULT_CHAR_STORAGE_PRE_ALLOC)
+            {
+                toReturn = DEFAULT_CHAR_STORAGE_PRE_ALLOC;
+                //If old was already DEFAULT_CHAR_STORAGE_PRE_ALLOC, then don't bother with a recomputation
+                if(old == toReturn)
+                {
+                    return old;
+                }
+            }
+            else if(old < toReturn)
+            {
+                //If our old size over sized, then shrink down a bit
+                //Equivalent to 1 - 1/4 + 1/16 = 3/4 + 1/16 = 12/16 + 1/16 = 13/16 = 81.25%
+                int newOld = old - (old >> 2) + (old >> 4);
+                toReturn = toReturn > newOld ? toReturn : newOld;
+            }
+        }
+        if(toReturn <= DEFAULT_CHAR_STORAGE_PRE_ALLOC)
+            return DEFAULT_CHAR_STORAGE_PRE_ALLOC;
+        if(toReturn <= CHAR_STORAGE_PRE_ALLOC_ANSI)
+            return CHAR_STORAGE_PRE_ALLOC_ANSI;
+        return toReturn > MAX_CHAR_STORAGE_PRE_ALLOC ? MAX_CHAR_STORAGE_PRE_ALLOC : toReturn;
+    }
 
     //This is where the "magic" happens
     //XXX O(3n + 2m), ugly :(
     private int[] bucketSort(final int fromIndex, final int toIndex,
         final int charIndex, final boolean trackMaxLen)
     {
+        //Note The SortState is not given for from, to, etc, but rather for updating the max seen character 
         final int len = toIndex - fromIndex;
         @SuppressWarnings("hiding") //We are trying to shift from a instance member lookup to a local variable lookup for performance 
         final String[] arr = this.arr;
         @SuppressWarnings("hiding") //We are trying to shift from a instance member lookup to a local variable lookup for performance
         final String[] wc = this.wc;
+        final int oldMaxValueSeen = maxCharValueSeen;
         // This will grow as needed
-        // Default size should hold the standard ANSI charset
-        int[] charCountBuffer = new int[0xFF];
+        int[] charCountBuffer = new int[oldMaxValueSeen];
 
         int minCharSeen = Integer.MAX_VALUE;
         int maxCharSeen = Integer.MIN_VALUE;
@@ -787,7 +833,7 @@ public final class MSDStringSorter
                 {
                     maxCharSeen = c;
                     charCountBuffer = (charCountBuffer.length < c) ?
-                        Arrays.copyOf(charCountBuffer, c + 0x1F) :
+                        Arrays.copyOf(charCountBuffer, c + (charCountBuffer.length >> 3) + 1) :
                         charCountBuffer;
                 }
                 ++charCountBuffer[c];
@@ -806,14 +852,16 @@ public final class MSDStringSorter
                 {
                     maxCharSeen = c;
                     charCountBuffer = (charCountBuffer.length < c) ?
-                        Arrays.copyOf(charCountBuffer, c + 0x1F) :
+                        Arrays.copyOf(charCountBuffer, c + (charCountBuffer.length >> 3) + 1) :
                         charCountBuffer;
                 }
                 ++charCountBuffer[c];
             }
             maxIndexTempTrack = -1;
         }
-
+        
+        maxCharValueSeen = getNewUpdateSize(oldMaxValueSeen, maxCharSeen);
+        
         if(minCharSeen == maxCharSeen)
         {
             // Only one char seen, that is a sign to just skip this sub-block, and move on
@@ -938,6 +986,7 @@ public final class MSDStringSorter
         int end;
         int index;
         int maxIndex;
+        //If this extra field turns out to be too much overhead, then this should shift to a global sort state type thing
         
         SortState(){} //Don't really care what the initial values are in this case
 
@@ -1037,14 +1086,14 @@ public final class MSDStringSorter
     }
 
     //Higher values mean more for higher input sizes
-    private static final int NUM_TIMES_WARMUP_RATIO = 5_000_000;
-    private static final int NUM_TIMES_RUN_SORT_RATIO = 8_000_000;
+    private static final int NUM_TIMES_WARMUP_RATIO = 4_000_000;
+    private static final int NUM_TIMES_RUN_SORT_RATIO = 10_000_000;
     private static final int MAX_NUM_TO_PRINT = 1000;
 
     private static final int TIME_TO_PAUSE_AFTER_WARMUP = 20;
     private static final int INDEX_TO_PART_SORT_TO = 40;
     
-    private static final boolean ONLY_MSD_SORT = true;
+    private static final boolean ONLY_MSD_SORT = false;
     private static final boolean ONLY_ONE_RUN = false;
     private static final boolean GC_BETWEEN_EACH_SORT = false;
     
@@ -1053,7 +1102,11 @@ public final class MSDStringSorter
         if(GC_BETWEEN_EACH_SORT)
             System.gc();
     }
+    
+    private static final int NS_IN_MS = 1000000;
 
+    //These command line args seem to work well
+    //-Xms420m -Xmx420m -XX:NewSize=340m -XX:MaxNewSize=340m -XX:SurvivorRatio=18 -XX:+RelaxAccessControlCheck -XX:Tier0ProfilingStartPercentage=150 -XX:Tier3CompileThreshold=3000 -XX:Tier3BackEdgeThreshold=5500 -XX:MaxRecursiveInlineLevel=3
     public static void main(String... args) throws java.io.IOException, InterruptedException
     {
         // System.err.println("Pausing for 30 seconds");
@@ -1076,7 +1129,7 @@ public final class MSDStringSorter
         
         for(String s : test)
         {
-            if(s.contains("\0"))
+            if(s.indexOf('\0') >= 0)
             {
                 System.err
                     .println("Dataset contains embedded null chars, this may cause discrepencies");
@@ -1084,6 +1137,9 @@ public final class MSDStringSorter
             }
         }
         // Now, "warm up" the JIT
+        
+        System.err.println("Will run sorts " + NUM_TIMES_WARMUP + " time(s) for warmup");
+        System.err.println("Will run sorts " + NUM_TIMES_RUN_SORT + " time(s) for benchmark");
 
         System.err.println("Warming up JIT compiler");
 
@@ -1205,14 +1261,14 @@ public final class MSDStringSorter
             }
         }
 
-        System.out.println("MSD sort, total:" + msdSortTime / 1000000 + ", average: " +
-            ((double)msdSortTime / NUM_TIMES_RUN_SORT) / 1000000);
+        System.out.println("MSD sort, total:" + msdSortTime / NS_IN_MS + ", average: " +
+            ((double)msdSortTime / NUM_TIMES_RUN_SORT) / NS_IN_MS);
         if(!ONLY_MSD_SORT)
         {
-            System.out.println("Arrays.sort sort, total:" + arraysSortTime / 1000000 + ", average: " +
-                ((double)arraysSortTime / NUM_TIMES_RUN_SORT) / 1000000);
-            System.out.println("Partial sort to Arrays.sort, total:" + partialSortTime / 1000000 + ", average: " +
-                ((double)partialSortTime / NUM_TIMES_RUN_SORT) / 1000000);
+            System.out.println("Arrays.sort sort, total:" + arraysSortTime / NS_IN_MS + ", average: " +
+                ((double)arraysSortTime / NUM_TIMES_RUN_SORT) / NS_IN_MS);
+            System.out.println("Partial sort to Arrays.sort, total:" + partialSortTime / NS_IN_MS + ", average: " +
+                ((double)partialSortTime / NUM_TIMES_RUN_SORT) / NS_IN_MS);
         }
         
         //Thread.sleep(TIME_TO_PAUSE_AFTER_WARMUP * 1000);

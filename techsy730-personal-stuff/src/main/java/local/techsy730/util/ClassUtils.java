@@ -13,6 +13,7 @@ public final class ClassUtils
     //Thanks to the Java spec though, all String literals are assured to already be interned for us 
     private static final String LANG_CLASS_CLASS_NAME = "Class";
     private static final String LANG_CLASS_LOADER_CLASS_NAME = "ClassLoader";
+    private static final String LANG_CLONEABLE_CLASS_NAME = "Cloneable";
     private static final String LANG_STRING_CLASS_NAME = "String";
     private static final String LANG_THROWABLE_CLASS_NAME = "Throwable";
     private static final String LANG_EXCEPTION_CLASS_NAME = "Exception";
@@ -80,6 +81,13 @@ public final class ClassUtils
      * Tests whether o is an instance of a class provided by the given <i>fully qualified</i>, raw (no generic types given) class name.
      * However, it treats failure to resolve the class (like if it doesn't exist or security restrictions prevent loading it)
      * as false, as presumably the class cannot be loaded and as such, there is no way the given object is an instance of it.
+     * NOTE: It is possible that for certain core library classes (those in the java package or sub-packages) will not be loaded
+     * using the current ClassLoader, but rather using the "bootstrap" ClassLoader.
+     * This shouldn't give any different results unless the current ClassLoader was a non-delegation first ClassLoader,
+     * in which case it might.<p>
+     * NOTE: This method tries to use the ClassLoader of the caller of this method. However, if it cannot determine the caller's
+     * ClassLoader due to Java security policies, it will instead fall back on its own ClassLoader.
+     * Use {@link #isInstanceFalseOnFail(Object, String, ClassLoader)} if you want to ensure which ClassLoader is used.
      * @param o the object to test
      * @param className the <i>fully qualified</i> name of the class to check o is an instance of
      * @return true if o is an instance of the class provided, false if it isn't or if the class failed to be resolved 
@@ -94,22 +102,12 @@ public final class ClassUtils
         CheckedBooleanTriState commonCaseCheck = isInstanceCommonCases(o, className); //Fast path for common classes
         if(commonCaseCheck.isChecked())
             return commonCaseCheck.boolValue();
-        try
-        {
-            //FIXME This should really be the ClassLoader of who is calling me, this will use the ClassLoader who loaded ClassUtils itself
-            return Class.forName(className).isInstance(o);
-        }
-        catch(ClassNotFoundException err)
-        {
-            //Can't find the class, so clearly not an instance
-            return false;
-        }
-        catch(LinkageError err)
-        {
-            //Error while loading the class, so clearly not an instance
-            return false;
-        }
+        ClassLoader clToUse = RuntimeTools.canGetStack() ? 
+            RuntimeTools.getCaller().getClassLoader() :
+            ClassUtils.class.getClassLoader();
+        return isInstanceFalseOnFail0(o, className, clToUse);
     }
+
     
     /**
      * Tests whether o is an instance of a class provided by the given <i>fully qualified</i>, raw (no generic types given) class name,
@@ -118,11 +116,16 @@ public final class ClassUtils
      * as false, as presumably the class cannot be loaded and as such, there is no way the given object is an instance of it.<p>
      * NOTE: It is possible that for certain core library classes (those in the java package or sub-packages) will not be loaded
      * using the given ClassLoader, but rather using the "bootstrap" ClassLoader.
-     * This shouldn't give any different results unless the ClassLoader given was a non-delegation first ClassLoader.
+     * This shouldn't give any different results unless the ClassLoader given was a non-delegation first ClassLoader,
+     * in which case it might.
      * @param o the object to test
      * @param className the <i>fully qualified</i> name of the class to check o is an instance of
      * @param classLoaderToUse the ClassLoader to use to lookup the class name
      * @return true if o is an instance of the class provided, false if it isn't or if the class failed to be resolved
+     * @throws SecurityException if the current context does not allow direct access to the given ClassLoader.
+     *                              this is chosen instead of false because just because this method cannot access the classloader,
+     *                              doesn't mean the class is not loaded, and as such, o might be an instance,
+     *                              so it would not be safe to say it isn't.  
      */
     public static boolean isInstanceFalseOnFail(final Object o, final String className, final ClassLoader classLoaderToUse)
     {
@@ -134,6 +137,26 @@ public final class ClassUtils
         CheckedBooleanTriState commonCaseCheck = isInstanceCommonCases(o, className); //Fast path for common classes
         if(commonCaseCheck.isChecked())
             return commonCaseCheck.boolValue();
+        return isInstanceFalseOnFail0(o, className, classLoaderToUse);
+    }
+
+    private static boolean isInstanceFalseOnFail0(final Object o, final String className,
+        final ClassLoader classLoaderToUse)
+    {
+        try
+        {
+            if(o.getClass().getClassLoader() == classLoaderToUse &&
+               o.getClass().getName().equals(className))
+            {
+                //If both the classloader and the fully qualified name match up
+                //Then it must be the exact class, meaning it is trivially an instance of it
+                return true;
+            }
+        }
+        catch(SecurityException err)
+        {
+            //Well, we can't get access to the class loader directly, so just go on to the next check.
+        }
         try
         {
             return Class.forName(className, false, classLoaderToUse).isInstance(o);
@@ -150,10 +173,28 @@ public final class ClassUtils
         }
         catch(SecurityException err)
         {
-            //XXX Should this really be considered false?
-            //This just means I cannot ask the ClassLoader for this class
-            //However, it may already be loaded, and if so, there may be instances for it, which what we were given should be.
-            return false;
+            //Well, we can't use it directly, let's try "flexing" our "full" permission "muscles".
+            return ((Boolean)java.security.AccessController.doPrivileged(
+                new java.security.PrivilegedAction()
+                {
+                    public Object run()
+                    {
+                        try
+                        {
+                            return Boolean.valueOf(Class.forName(className, false, classLoaderToUse).isInstance(o));
+                        }
+                        catch(ClassNotFoundException err)
+                        {
+                            //Can't find the class, so clearly not an instance
+                            return Boolean.FALSE;
+                        }
+                        catch(LinkageError err)
+                        {
+                            //Error while loading the class, so clearly not an instance
+                            return Boolean.FALSE;
+                        }
+                    }  
+                })).booleanValue();
         }
     }
     
@@ -193,6 +234,8 @@ public final class ClassUtils
             else if(packageParts[1].equals("lang"))
             {
                 //Most common cases first
+                if(intenedClassName == LANG_CLONEABLE_CLASS_NAME)
+                    return wrapChecked(o instanceof Cloneable);
                 if(intenedClassName == LANG_THROWABLE_CLASS_NAME)
                     return wrapChecked(o instanceof Throwable);
                 if(intenedClassName == LANG_EXCEPTION_CLASS_NAME)
@@ -231,8 +274,10 @@ public final class ClassUtils
     
     public static void main(String... args)
     {
-        System.out.println(isInstanceFalseOnFail(new java.util.ArrayList<Object>(), "java.util.List"));
+        System.out.println(isInstanceFalseOnFail(new java.util.ArrayList(), "java.util.List"));
+        System.out.println(isInstanceFalseOnFail(new java.util.ArrayList(), "java.lang.Cloneable"));
         System.out.println(isInstanceFalseOnFail(new Object(), "java.lang.reflect.Method"));
+        System.out.println(isInstanceFalseOnFail(Object.class.getMethods()[0], "java.lang.reflect.Method"));
         System.out.println(isInstanceFalseOnFail(new Object(), "java.lang.String"));
         System.out.println(isInstanceFalseOnFail(new Object(), "java.lang.Object"));
         System.out.println(isInstanceFalseOnFail(ClassUtils.class, "java.lang.Object"));

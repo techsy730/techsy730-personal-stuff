@@ -26,7 +26,7 @@ public final class Functions
                 public R call()
                 {
                     return function.callRoot(null); 
-                }                
+                }
             };
     }
     
@@ -42,6 +42,24 @@ public final class Functions
                 public R call(T arg)
                 {
                     return function.callRoot(arg); 
+                }
+                
+                @Override
+                public Class<?> returnType()
+                {
+                    return function.returnType();
+                }
+                
+                @Override
+                public java.lang.Class<?>[] getArgumentTypes()
+                {
+                    return function.getArgumentTypes();
+                }
+                
+                @Override
+                public java.lang.Class<?> getArgumentType(int arg)
+                {
+                    return function.getArgumentType(arg);
                 }
             };
     }
@@ -59,6 +77,24 @@ public final class Functions
                 public R call(T1 arg1, T2 arg2)
                 {
                     return function.callRoot(new SimpleParameterPair<>(arg1, arg2));
+                }
+                
+                @Override
+                public Class<?> returnType()
+                {
+                    return function.returnType();
+                }
+                
+                @Override
+                public java.lang.Class<?>[] getArgumentTypes()
+                {
+                    return function.getArgumentTypes();
+                }
+                
+                @Override
+                public java.lang.Class<?> getArgumentType(int arg)
+                {
+                    return function.getArgumentType(arg);
                 }
             };
     }
@@ -79,7 +115,27 @@ public final class Functions
                     //At this point, it is cheaper to make an array than it is the chained parameter pairs
                     return function.callUnsafe(arg1, arg2, arg3);
                 }
+                
+                @Override
+                public Class<?> returnType()
+                {
+                    return function.returnType();
+                }
+                
+                @Override
+                public java.lang.Class<?>[] getArgumentTypes()
+                {
+                    return function.getArgumentTypes();
+                }
+                
+                @Override
+                public java.lang.Class<?> getArgumentType(int arg)
+                {
+                    return function.getArgumentType(arg);
+                }
             };
+            
+            
     }
     
     @SuppressWarnings("unchecked") //Um, compiler, that cast checks out generics safety wise. You saw that on asFunction1...I know you can figure this stuff out.
@@ -97,6 +153,24 @@ public final class Functions
                 {
                     //At this point, it is cheaper to make an array than it is the chained parameter pairs
                     return function.callUnsafe(arg1, arg2, arg3, arg4);
+                }
+                
+                @Override
+                public Class<?> returnType()
+                {
+                    return function.returnType();
+                }
+                
+                @Override
+                public java.lang.Class<?>[] getArgumentTypes()
+                {
+                    return function.getArgumentTypes();
+                }
+                
+                @Override
+                public java.lang.Class<?> getArgumentType(int arg)
+                {
+                    return function.getArgumentType(arg);
                 }
             };
     }

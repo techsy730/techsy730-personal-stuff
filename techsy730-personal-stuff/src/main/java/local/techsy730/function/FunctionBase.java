@@ -11,7 +11,7 @@ package local.techsy730.function;
  * 
  * @author C. Sean Young
  *
- * @param <R> The return type of the method.
+ * @param <R> The return type of the method, or Void if this function returns no value.
  *              If the argument type(s) cannot be known at compile time, it is OK for this to be defined as Object or left a raw type.
  * @param <T> The argument type of the method, or an ArgumentPair if there is more than one argument.
  *              Can be Void to indicate no parameters.
