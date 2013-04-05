@@ -91,7 +91,7 @@ public final class MSDStringSorter
     
     public static void sortPartially(int minCharsToSort, String[] arr, int fromIndex, int toIndex)
     {
-        // TODO We can do much better if we dump to char[] first
+        // XXX For large strings (greater than about 80 characters), dumping to char[] using toCharArray() is faster
         if(checkBounds(arr.length, fromIndex, toIndex)) return;
         final int len = toIndex - fromIndex;
         if(len == 2)
@@ -285,10 +285,10 @@ public final class MSDStringSorter
         final boolean shouldMerge = remainingCharsToProcess < MAX_REMAINING_BEFORE_MERGING_RANGES;
         final int maxMergedRangeSize = remainingCharsToProcess < MAX_REMAINING_BEFORE_FULL_ARRAYS_SORT ? MAX_ARRAYS_FULL_SORT : MAX_INSERTION_SORT;
         boolean atStartOfBlock = end - start >= MIN_BINARY_SEARCH;
-        final java.util.Comparator<String> comp = new NaturalCharComparatorAtIndex(index);
         char curChar2 = curChar;
         if(atStartOfBlock) //Skip the longer form of the loop if we are not binary searching
         {
+            final java.util.Comparator<String> comp = new NaturalCharComparatorAtIndex(index);
             int newStart = start;
             {   //Make sure to update the version of this inside the loop as well
                 //Before doing a binary search, check the next string (if any) so we don't waste time on blocks of size 1
@@ -640,6 +640,7 @@ public final class MSDStringSorter
     private static final java.util.Comparator<String> getRemainingCharSortComparator(final String[] arr, final int fromIndex,
         final int toIndex, final int charIndex, final int maxIndex)
     {
+        //This is to try to avoid sorting on a bunch of characters past the number the user asked for
         final int maxIndexRealGuess = Math.max(Math.max(arr[fromIndex].length(), arr[toIndex - 1].length()), arr[(toIndex + fromIndex) >> 1].length());
         return maxIndexRealGuess - maxIndex > MAX_DIFF_BETWEEN_MAX_INDEX_GUESS_AND_REAL_MAX ?
             new NaturalSubstringComparator(charIndex, maxIndex) :
@@ -762,16 +763,16 @@ public final class MSDStringSorter
     }
     
     // Default size should hold the standard ANSI charset
-    private static final int DEFAULT_CHAR_STORAGE_PRE_ALLOC = 0x7F;
+    private static final int DEFAULT_CHAR_STORAGE_PRE_ALLOC = 0x7F + 1;
     
-    private static final int CHAR_STORAGE_PRE_ALLOC_ANSI = 0xFF;
+    private static final int CHAR_STORAGE_PRE_ALLOC_ANSI = 0xFF + 1;
     
     //Big enough to hold most of the fancy "script" characters used in Chinese, Japanese, etc.
-    private static final int MAX_CHAR_STORAGE_PRE_ALLOC = 0x2FA1F; 
+    private static final int MAX_CHAR_STORAGE_PRE_ALLOC = 0x2FA1F + 1; 
     
     private static final int getNewUpdateSize(final int old, final int maxSeen)
     {
-        int toReturn = maxSeen;
+        int toReturn = maxSeen + 1;
         //Never shrink below DEFAULT_CHAR_STORAGE_PRE_ALLOC
         if(old >= DEFAULT_CHAR_STORAGE_PRE_ALLOC)
         {
@@ -891,6 +892,9 @@ public final class MSDStringSorter
             wc[(indexes[c - minCharSeen]++) + fromIndex] = arr[i];
         }
 
+        // XXX Find a way to do that thing where you swap the working copy and the real array each iteration
+        // This is tricky though, as the number of iterations is not fixed, or even consistent among all
+        // subsets of the array to be sorted
         // Copy back over into the real array
         System.arraycopy(wc, fromIndex, arr, fromIndex, len);
         return indexesOrig;
@@ -1114,11 +1118,11 @@ public final class MSDStringSorter
         // As of Java 1.7.0_02, java.util.Arrays has a whopping 124 methods in it.
         // Due to the nature of methods, there are ALOT of shared prefixes, making this a
         // decent test candidate
-        String[] test = org.apache.commons.io.IOUtils.readLines(
-            MSDStringSorter.class.getResourceAsStream("usagov_bitly_data2012-10-29-1351522030"))
-            .toArray(new String[0]);
+//        String[] test = org.apache.commons.io.IOUtils.readLines(
+//            MSDStringSorter.class.getResourceAsStream("usagov_bitly_data2012-10-29-1351522030"))
+//            .toArray(new String[0]);
 //        String[] test = org.apache.commons.io.IOUtils.readLines(MSDStringSorter.class.getResourceAsStream("README")).toArray(new String[0]);
-//        String[] test = toArrayString(Arrays.class.getDeclaredMethods());
+        String[] test = toArrayString(Arrays.class.getDeclaredMethods());
         java.util.Collections.shuffle(Arrays.asList(test));
         //String[] test = new String[5000];
         //Arrays.fill(test, "");
@@ -1126,6 +1130,8 @@ public final class MSDStringSorter
         
         final int NUM_TIMES_WARMUP = ONLY_ONE_RUN ? 1 : Math.max(20, NUM_TIMES_WARMUP_RATIO / test.length);
         final int NUM_TIMES_RUN_SORT = ONLY_ONE_RUN ? 1 : Math.max(50, NUM_TIMES_RUN_SORT_RATIO / test.length);
+        
+        if(test.length < MAX_NUM_TO_PRINT) System.out.println(Arrays.toString(test));
         
         for(String s : test)
         {
@@ -1174,9 +1180,8 @@ public final class MSDStringSorter
         long startTime;
         long endTime;
         long msdSortTime = 0; 
-
+        
         System.err.println("Starting MSD sort test");
-        if(test.length < MAX_NUM_TO_PRINT) System.out.println(Arrays.toString(test));
         for(int i = 0; i < NUM_TIMES_RUN_SORT - 1; ++i)
         {
             startTime = System.nanoTime();
