@@ -94,6 +94,7 @@ public abstract class AbstractFunction4<R, T1, T2, T3, T4>
         return 4;
     }
 
+    @SuppressWarnings("unchecked")
     @Override
     public R callUnsafe(Object... arguments)
     {

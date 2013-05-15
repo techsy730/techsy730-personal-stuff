@@ -200,7 +200,7 @@ public final class Functions
         new AbstractFunction1<Object, Object>()
         {
             @Override
-            public final Object call(Object argument)
+            public final Object call(final Object argument)
             {
                 return argument;
             }
@@ -216,7 +216,7 @@ public final class Functions
         new AbstractFunction2<Boolean, Object, Object>()
         {
             @Override
-            public Boolean call(Object o1, Object o2)
+            public Boolean call(final Object o1, final Object o2)
             {
                 return java.util.Objects.equals(o1, o2);
             }
@@ -228,7 +228,7 @@ public final class Functions
             new AbstractFunction1<Boolean, Object>()
             {
                 @Override
-                public Boolean call(Object other)
+                public Boolean call(final Object other)
                 {
                     return java.util.Objects.equals(o, other);
                 }
@@ -256,7 +256,7 @@ public final class Functions
         new AbstractFunction1<Integer, Object>()
         {
             @Override
-            public Integer call(Object arg)
+            public Integer call(final Object arg)
             {
                 return java.util.Objects.hashCode(arg);
             }

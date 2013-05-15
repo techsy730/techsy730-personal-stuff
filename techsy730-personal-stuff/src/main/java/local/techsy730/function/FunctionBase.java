@@ -15,7 +15,7 @@ package local.techsy730.function;
  *              If the argument type(s) cannot be known at compile time, it is OK for this to be defined as Object or left a raw type.
  * @param <T> The argument type of the method, or an ArgumentPair if there is more than one argument.
  *              Can be Void to indicate no parameters.
- *              see {@link #getArgumentCount()} for more rules about T's type.
+ *              See {@link #getArgumentCount()} for more rules about T's type.
  *              If the argument type(s) cannot be known at compile time, it is OK for this to be defined as Object or left a raw type.
  *              If T is left as a raw type OR if it is declared to be an Object due to its type not being knowable until runtime,
  *              then T is not considered well defined at compile time. 
@@ -24,18 +24,18 @@ public interface FunctionBase<R, T> extends FunctionTypeWithR<R>
 {
     
     /**
-     * Returns the number of arguments this function takes. Will always be >=0.<p />
+     * Returns the number of arguments this function takes. Will always be &gt;=0.<p />
      * If T is well defined at compile time, it must be that:<br />
-     * T is of type Void if this method returns 0<br />
-     * T is not of type ParameterPair and not Void if this method returns 1<br />
-     * T is of type ParameterPair if this method returns >1<p />
+     * T is of type Void if and only if this method returns 0<br />
+     * T is not of type ParameterPair and not Void if and only if this method returns 1<br />
+     * T is of type ParameterPair if and only if this method returns a value that is &gt;1<p />
      * 
      * It is highly recommended that this count remains consistent for each concrete implementation,
      * which implies that it remains consistent throughout a FunctionBase's lifetime.
      * <br />
      * If this rule is violated, it is impossible to implement T in a well defined way at compile time.
      * This may unavoidable at times though for functions that do not know which types they can accept until runtime,
-     * such as those that wrap {@link java.lang.reflect.Method Method} objects
+     * such as those that wrap arbitrary {@link java.lang.reflect.Method Method} objects
      * 
      * @return the number of arguments this function takes.
      */
@@ -48,6 +48,12 @@ public interface FunctionBase<R, T> extends FunctionTypeWithR<R>
      */
     public Class<?> returnType();
     
+    /**
+     * Returns the expected runtime type that the parameter at the given index this function requires.
+     * @param argument the index of the parameter to query
+     * @return the expected runtime type that the parameter at the given index this function requires
+     * @throws IndexOutOfBoundsException if the index given is &lt;0 or &gt;= {@link #getArgumentCount()}
+     */
     public Class<?> getArgumentType(int argument);
     
     public Class<?>[] getArgumentTypes();
@@ -70,7 +76,7 @@ public interface FunctionBase<R, T> extends FunctionTypeWithR<R>
      *                              (which would imply ParameterPairs in the wrong places, thus still falling under type violation),
      *                              though it is valid for an implementation to throw an IllegalArgumentException instead if it detects this case.
      * @throws IllegalArgumentException if number of arguments given does not match up with the expected number of arguments this function expects.
-     *                              it is valid for an implementation to throw this exception instead of a ClassCastException if the "unwrapped" argument count
+     *                              It is valid for an implementation to throw this exception instead of a ClassCastException if the "unwrapped" argument count
      *                              does not match up with the number of arguments this function takes.
      */
     public R callRoot(T argument);
@@ -86,7 +92,8 @@ public interface FunctionBase<R, T> extends FunctionTypeWithR<R>
      * by dealing with ArgumentPairs
      * The abstract helper classes will deal with the complexities of this method.
      * <p />
-     * NOTE, this method will NOT throw an IndexOutOfBoundsException due to a bad number of arguments.
+     * NOTE, this method should NOT throw an IndexOutOfBoundsException (or subclasses, including the {@link ArrayIndexOutOfBoundsException array specific subclass})
+     * due to a bad number of arguments.
      * Thus, implementors must check the argument count first before trying to use the arguments. <p />
      * 
      * This interface gives no stipulation on behavior if the given array

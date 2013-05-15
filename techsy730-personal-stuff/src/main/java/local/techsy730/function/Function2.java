@@ -2,6 +2,8 @@ package local.techsy730.function;
 
 public interface Function2<R, T1, T2>
     extends
+        FunctionBase<R, ParameterPair<T1, T2>>,
+        
         TwoOrMoreParameterFunction<R, T1, T2,
             T2, //AggregateWithNoFirstType
             T1, //AggregateWithNoSecondType
@@ -10,7 +12,7 @@ public interface Function2<R, T1, T2>
             Function0<R>, //Bound1stAnd2ndType
             Function1<R, T2>, //Bound1stFunctionType
             Function1<R, T1>>, //Bound2ndFunctionType
-        FunctionBase<R, ParameterPair<T1, T2>>, FunctionN, FunctionTypeWithR<R>
+        FunctionN, FunctionTypeWithR<R>
 {
     public R call(T1 arg1, T2 arg2);
     

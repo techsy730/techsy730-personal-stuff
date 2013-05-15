@@ -73,6 +73,7 @@ public abstract class AbstractFunction3<R, T1, T2, T3> extends AbstractFunctionB
         return 3;
     }
 
+    @SuppressWarnings("unchecked")
     @Override
     public R callUnsafe(Object... arguments)
     {

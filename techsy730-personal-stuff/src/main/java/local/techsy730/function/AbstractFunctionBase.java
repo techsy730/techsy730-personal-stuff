@@ -9,7 +9,12 @@ import local.techsy730.util.ClassUtils2;
 /**
  * A skeletal implementation for function types.
  * This class defines {@link #callRoot(Object) callRoot(T)} on top of its {@link #callUnsafe(Object...) callUnsafe(Object...)}
- * function, due to {@link #callUnsafe(Object...) callUnsafe(Object...)} being easier and more intuitive to implement, despite it's lack of compile time type safety
+ * function, due to {@link #callUnsafe(Object...) callUnsafe(Object...)} being easier and more intuitive to implement, despite it's lack of compile time type safety.<br>
+ * <p>
+ * Users of the API will rarely need to deal with this class directly.
+ * It is mostly to facilitate compile time type safety in the absence of variable argument generics.
+ * Instead, most users will want to look at the AbstractFunctionN interfaces, where N is the number of arguments needed.
+ * These provide much "cleaner" contracts to implement, and deal with complexities of the "generics chaining" mechanisms for the user.
  * @author C. Sean Young
  *
  * @param <R> {@inheritDoc}
@@ -32,6 +37,7 @@ public abstract class AbstractFunctionBase<R, T> implements FunctionBase<R, T>, 
     @SuppressWarnings("unchecked")
     static final Class<?> findReturnType(Type selfClass)
     {
+        assert selfClass != null;
         try
         {
             //Reflectively try to get the type of R that this class has passed in
@@ -132,12 +138,12 @@ public abstract class AbstractFunctionBase<R, T> implements FunctionBase<R, T>, 
      * <p>
      * This implementation attempts to find the return type based on the parameterized types
      * given to the super classes and/or interface at the declaration of this object's class.
-     * If it fails to extract this information at runtime for any reason, it will fallback onto
+     * If it fails to extract this information at runtime for any reflection related reason, it will fallback onto
      * returning Object.<br>
      * Due to the unreliability of parsing type parameter information at runtime,
      * this may sometimes give odd results in "chains" of return types.
      * Like if the function returns an Integer, but extends or implements
-     * a function that returns a N extends Number (where N is a type parameter subclasses give, Integer in this case),
+     * a function that returns an N extends Number (where N is a type parameter subclasses give, Integer in this case),
      * then this function might return Integer or Number, or possibly even Object.<p>
      * 
      * Also, this implementation caches the return type per concrete Class, the idea being that the
@@ -146,9 +152,9 @@ public abstract class AbstractFunctionBase<R, T> implements FunctionBase<R, T>, 
      * time with the somewhat expensive reflection for each call.<p>
      * 
      * If a subclass knows which type (or at least, top level type) it will always return,
-     * but it is not made clear by the type parameters, or if there are many levels of indirection between
-     * this object's class and the FunctionBase class, then it is reccomended to override this
-     *  and have it return that class object.
+     * but it is not made clear by the type parameters, or if there are many levels of "indirection" between
+     * this object's class and the FunctionBase interface, then it is recommended to override this method
+     * and have it return that class object.
      */
     public Class<?> returnType()
     {

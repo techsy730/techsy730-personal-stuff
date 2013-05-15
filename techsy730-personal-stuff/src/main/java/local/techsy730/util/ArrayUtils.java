@@ -1,5 +1,7 @@
 package local.techsy730.util;
 
+import local.techsy730.math.IntUtils;
+
 import com.google.common.cache.LoadingCache;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
@@ -41,24 +43,53 @@ public class ArrayUtils
 	 * This makes this array effectively immutable, as no non-null value can be assigned to its only element
 	 * and not have some sort of exception (typically, an {@link ArrayStoreException}) be raised.
 	 */
-	public static final Object[] NULL_ONLY_ARRAY = new NoInstance[]{null};
+	public static final Object[] NULL_ONLY_ARRAY =
+	    java.security.AccessController.doPrivileged(
+	        new java.security.PrivilegedAction<Object[]>()
+	        {
+                @Override
+                public Object[] run()
+                {
+                    return new NoInstance[]{null};
+                }
+	        });
+	            
 	
-	private static final class NoInstance
+	//TODO Add this class in the list of "restricted access" stuff of the package/jar descriptor
+	private static enum NoInstance
 	{
+	    //Note, no constants listed; this is an enum with no values.
+	    //This is declared as an enum just to let the JVM know it should try to 
+	    //"protect" the constructor of this class closely.
+	    ;
+	    
+	    {
+	        //This if statement is to "fool" the compiler into thinking this initializer can complete normally
+	        //It is not allowed for an initializer to unconditionally throw a Throwable
+	        if(true)
+	        {
+	            throw new NoSuchMethodError("Cannot instantiate"); //Paranoia in the face of reflection madness
+	        }
+	    }
+	    
+	    //TODO perhaps use the reflection filtering thing in sun.reflect.Reflection if it is available?
+	    //This way, even getDeclaredConstructors() will claim there are no constructors.
 		private NoInstance()
 		{
 			throw new NoSuchMethodError("Cannot instantiate"); //Paranoia in the face of reflection madness
 		}
 	}
 	
-	
 	//Some aliases
 	public static final int[] EMPTY_INT_ARRAY = EMPTY_INTEGER_ARRAY;
 	public static final char[] EMPTY_CHAR_ARRAY = EMPTY_CHARACTER_ARRAY;
 	
+	private static final int CONCURRENCY_LEVEL = 
+        IntUtils.clamp((long)Runtime.getRuntime().availableProcessors() * 2, 4, 32);
+	
 	//Weak keys to allow classes to be unloaded, soft values to allow the empty arrays to be unloaded but avoided if it can afford to
 	private static final LoadingCache<Class<?>, Object> emptyArrayMap = CacheBuilder.newBuilder().
-		initialCapacity(32).weakKeys().softValues().concurrencyLevel(4).build(new CacheLoader<Class<?>, Object>()
+		initialCapacity(32).weakKeys().softValues().concurrencyLevel(CONCURRENCY_LEVEL).build(new CacheLoader<Class<?>, Object>()
 		{
 			@Override
 			public Object load(Class<?> c)
@@ -68,14 +99,22 @@ public class ArrayUtils
 		});
 	
     private static final LoadingCache<Integer, Object[]> nullOnlyMap = CacheBuilder.newBuilder().
-        initialCapacity(8).softValues().concurrencyLevel(4).build(new CacheLoader<Integer, Object[]>()
+        initialCapacity(4).weakValues().concurrencyLevel(CONCURRENCY_LEVEL).build(new CacheLoader<Integer, Object[]>()
         {
             @Override
-            public Object[] load(Integer count)
+            public Object[] load(final Integer count)
             {
                 if(count < 0)
                     throw new ArrayIndexOutOfBoundsException(count);
-                return new NoInstance[count];
+                return java.security.AccessController.doPrivileged(
+                    new java.security.PrivilegedAction<Object[]>()
+                    {
+                        @Override
+                        public Object[] run()
+                        {
+                            return new NoInstance[count];
+                        }
+                    });
             }
         });
    
@@ -115,7 +154,21 @@ public class ArrayUtils
 	/**
 	 * Returns a possibly cached array of 0 size with the component type being the class type given.
 	 * As this method returns a T[], primitive arrays cannot be accessed through this method.
-	 * Use {@link #getEmptyArray(Class)} for cases where arrays of primitives may be needed.
+	 * Use {@link #getEmptyArray(Class)} for cases where arrays of primitives may be needed.<p>
+	 * 
+	 * As a lookup in a cache (if the implementation uses one) is likely to introduce some overhead.
+	 * Thus, the intended use pattern is to store this into a static constant.
+	 * The following code snippet would be considered a typical usage pattern.
+	 * <code>
+	 * private static final Foo[] EMPTY_FOO_ARRAY = ArrayUtils.getEmptyObjectArray(Foo.class);
+	 * 
+	 * public static Foo[] dumpToFooArray(java.util.Collection&lt;? extends Foo&gt; coll)
+	 * {
+	 *     if(coll == null)
+	 *         return EMPTY_FOO_ARRAY;
+	 *     return coll.toArray(EMPTY_FOO_ARRAY);
+	 * }
+	 * </code>
 	 * @param <T> The compile time type of the array to be returned
 	 * @param type the runtime type of the array to be returned
 	 * @return a possibly cached array of 0 size with the component type being the class type given
@@ -132,11 +185,30 @@ public class ArrayUtils
 	}
 	
 	/**
-     * Returns a possibly cached array of 0 size with the component type being the class type given.
+     * Returns a possibly cached array of 0 size with the component type being the class type given.<br>
+     * If you know that the component type given is not a primitive type, then it may be more convenient
+     * to use {@link #getEmptyObjectArray(Class) getEmptyObjectArray(Class<T>)} as that method has
+     * a return compile time type of the proper array type, removing the need for a cast.
+     * <p>
+     * 
+     * As a lookup in a cache  (if the implementation uses one) is likely to introduce some overhead,
+     * the intended usage pattern is to store this into a static constant.
+     * The following code snippet would be considered a typical usage pattern.
+     * <code><pre>
+     * private static final Foo[] EMPTY_FOO_ARRAY = (Foo[])ArrayUtils.getEmptyArray(Foo.class);
+     * 
+     * public static Foo[] dumpToFooArray(java.util.Collection&lt;? extends Foo&gt; coll)
+     * {
+     *     if(coll == null)
+     *         return EMPTY_FOO_ARRAY;
+     *     return coll.toArray(EMPTY_FOO_ARRAY);
+     * }
+     * </pre></code>
      * @param type the runtime type of the array to be returned
      * @return a possibly cached array of 0 size with the component type being the class type given
      * @throws IllegalArgumentException if the given type is {@link Void#TYPE}
      * @throws NullPointerException if the given type was null
+     * @see #getEmptyObjectArray(Class)
      */
 	public static final Object getEmptyArray(Class<?> type)
 	{

@@ -14,7 +14,7 @@ Mostly Java stuff, but I may throw in some Scala stuff as well.</description>
       <dependency>
           <groupId>com.google.guava</groupId>
           <artifactId>guava</artifactId>
-          <version>14.0-rc2</version>
+          <version>14.0.1</version>
       </dependency>
       <dependency>
           <groupId>it.unimi.dsi</groupId>
