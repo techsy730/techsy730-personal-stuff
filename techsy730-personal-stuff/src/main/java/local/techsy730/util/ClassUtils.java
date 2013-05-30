@@ -45,7 +45,7 @@ public final class ClassUtils
     //Not using enum, as that was added post 1.4
     private static final class CheckedBooleanTriState
     {
-        public static final CheckedBooleanTriState
+        static final CheckedBooleanTriState
             CHECKED_TRUE = new CheckedBooleanTriState(true, true),
             CHECKED_FALSE = new CheckedBooleanTriState(true, false),
             NOT_CHECKED_FALSE = new CheckedBooleanTriState(false, false);
@@ -77,6 +77,8 @@ public final class ClassUtils
         return val ? CheckedBooleanTriState.CHECKED_TRUE : CheckedBooleanTriState.CHECKED_FALSE;
     }
     
+    private static final ClassLoader MY_CLASSLOADER = ClassUtils.class.getClassLoader();
+    
     /**
      * Tests whether o is an instance of a class provided by the given <i>fully qualified</i>, raw (no generic types given) class name.
      * However, it treats failure to resolve the class (like if it doesn't exist or security restrictions prevent loading it)
@@ -91,6 +93,10 @@ public final class ClassUtils
      * @param o the object to test
      * @param className the <i>fully qualified</i> name of the class to check o is an instance of
      * @return true if o is an instance of the class provided, false if it isn't or if the class failed to be resolved 
+     * @throws SecurityException if the current context does not allow access to the requested Class.
+     *                              This is chosen instead of false because just because this method cannot access the class
+     *                              doesn't mean the class is not loaded, and as such, o might be an instance,
+     *                              so it would not be safe to say it isn't.
      */
     public static boolean isInstanceFalseOnFail(final Object o, final String className)
     {
@@ -102,10 +108,19 @@ public final class ClassUtils
         CheckedBooleanTriState commonCaseCheck = isInstanceCommonCases(o, className); //Fast path for common classes
         if(commonCaseCheck.isChecked())
             return commonCaseCheck.boolValue();
-        ClassLoader clToUse = RuntimeTools.canGetStack() ? 
-            RuntimeTools.getCaller().getClassLoader() :
-            ClassUtils.class.getClassLoader();
-        return isInstanceFalseOnFail0(o, className, clToUse);
+        if(RuntimeTools.canGetStack())
+        {
+            try
+            {
+                return isInstanceFalseOnFail0(o, className, RuntimeTools.getCaller().getClassLoader());
+            }
+            catch(SecurityException e)
+            {
+                //TODO Log this somehow
+                //Well, we can't use the caller's classloader, so "fallthrough" below to using our own classloader 
+            }
+        }
+        return isInstanceFalseOnFail0(o, className, MY_CLASSLOADER);
     }
 
     
@@ -122,8 +137,8 @@ public final class ClassUtils
      * @param className the <i>fully qualified</i> name of the class to check o is an instance of
      * @param classLoaderToUse the ClassLoader to use to lookup the class name
      * @return true if o is an instance of the class provided, false if it isn't or if the class failed to be resolved
-     * @throws SecurityException if the current context does not allow direct access to the given ClassLoader.
-     *                              this is chosen instead of false because just because this method cannot access the classloader,
+     * @throws SecurityException if the current context does not allow access to the given ClassLoader or requested Class.
+     *                              This is chosen instead of false because just because this method cannot access the classloader or class
      *                              doesn't mean the class is not loaded, and as such, o might be an instance,
      *                              so it would not be safe to say it isn't.  
      */
@@ -174,6 +189,8 @@ public final class ClassUtils
         catch(SecurityException err)
         {
             //Well, we can't use it directly, let's try "flexing" our "full" permission "muscles".
+            //Can't use the generics, as this class is supposed to be 1.4 source compatible
+            //Also, can't use @SuppressWarnings to stop this annoying warning for the same reason 
             return ((Boolean)java.security.AccessController.doPrivileged(
                 new java.security.PrivilegedAction()
                 {

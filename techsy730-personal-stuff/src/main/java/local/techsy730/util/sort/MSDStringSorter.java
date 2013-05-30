@@ -4,30 +4,62 @@ import java.util.Deque;
 import java.util.Arrays;
 
 // TODO DOCUMENTATION!
-// TODO Tuning so it can be on par with Arrays.sort
+// TODO Tuning so it can be on par with Arrays.sort even in not "optimal" cases where MSD radix sort shines 
 // XXX See if something can be done about "midstring" null characters ('\0') without harming performance much
-// TODO Paralell versions of these methods, as this is a trivially parralizable sort
+// TODO Parallel versions of these methods, as this is a trivially parallelizable sort
+// NOTE Throughout the various comments, especially run-time asymptotic behavior anaylsis, usually
+// n is used as the total number of strings to sort, and m is the maximum number of characters remaining any one string has left to be sorted on
+
 /**
+ * A class providing methods to sort string according to the most significant "digit" radix sort,
+ * where each character acts as the "digit".
+ * These methods provide a asymptotic linear time sort over the number of given strings.
+ * <p>
+ * Due to the specialized requirements to the domain space that radix sorts require, a custom comparator cannot be given.
+ * <p>
+ * While these methods do provide a asymptotic linear time sort over the number of given strings,
+ * the overhead for MSD radix sorts tends to be rather high. While this class does try to mitigate this by
+ * delegating smaller sets to sort to less overhead intensive algorithms, even with this it is likely to a bit slower to
+ * conventional sorts for small input sizes.<br>
+ * MSD radix sort works best compared to more traditional comparison sorts when: <br>
+ * 1. the input size over the number of entries is large (testing shows around 100 is a reasonable guess for a starting point for large) <br>
+ * 2. the average or max number of characters per string is large (testing shows around 40 is a reasonable guess for a starting point for large)<br>
+ * 3. most entries can have their order determined by the time looking at the middle of them,
+ *    with some entries being able to be considered sorted by the first few characters
+ *    (testing shows that even 5% of the input being able to be sorted by only the first few characters can yield significant speed up
+ *     using MSD sort over traditional comparison based sorts)<br>
+ * 4. the sample is sparse of the "universe" of possible entries over the max length of the strings.
+ *    (Because of how huge the Java character space is, it is generally better to treat the universe of Strings to be 
+ *     ANSI only when estimating density, as that will give a more useful number to predict performance of these methods)<br>
+ * Unless at least three of these are will usually be true for your inputs, you are better off using {@link Arrays#sort(Object[])},
+ * as that will likely yield better average running times due to lower overhead overcoming any savings the MSD radix sort algorithm can provide.<br>
+ * <p>
+ * It is important to note that for Sun's/Oracle's Java, starting at Java 7, {@link Arrays#sort(Object[])} is adaptive,
+ * which means for nearly sorted inputs, Arrays.sort(Object[]) will yield nearly linear times, and still have a smaller overhead than 
+ * MSD radix sort. So keep this in mind when choosing which sorting method to use.
  * 
  * @author C. Sean Young
  * 
  */
 public final class MSDStringSorter
 {
-    // XXX Empirically determine a good estimate for these constants, based on common
-    // usage cases
+    // XXX Empirically determine a good estimate for these constants, based on common usage cases
     //XXX This should be 16 or so on Java 7, but 7 on Java 6
     //NOTE Keep in mind that when this triggers, *up to* all of the remaining characters will be looked at for each comparison
     //Thus, setting this too high negates the advantages of MSD sort.
-    //This number was chosen based on some extremely rough "back of the envelope" theoritcal calculations and verfied loosly
+    //This number was chosen based on some extremely rough "back of the envelope" theoretical calculations and verified loosely
     //to be decent with very non-rigourous tests.
     //The advantage is that once a chunk gets sorted by this, that chunk will never have to be looked at again.
+    //For this value, SMALLER numbers mean MORE hesitant to trigger the optimization
+    //XXX May be a tad high, but not by much 
     private static final int MAX_INSERTION_SORT = 16;
     //Set to MAX_INSERTION_SORT to effectively disable this optimization
     //NOTE Keep in mind, if the Arrays.sort only on the current index is used
     //then we have to loop through that segment AGAIN to find the next layer of "chunks".
     //Thus, this needs to be kept somewhat low.
     //But not too low, as MSD sorting does involve a lot of overhead
+    //For these two values, SMALLER numbers mean MORE hesitant to trigger the optimization
+    //XXX These seem a bit high in the 50-60 range...    
     private static final int MAX_ARRAYS_INDEX_SORT = 51;
     private static final int MAX_ARRAYS_FULL_SORT = 59;
     
@@ -36,6 +68,7 @@ public final class MSDStringSorter
     
     //This causes a few extra loops to be run, and makes other loops gain extra operations, thus keep it somewhat low
     //However, the savings from a correctly computed max length can be rather large, so thus you don't need to be too conservative with it.
+    //XXX These values seem a bit high
     private static final int _MAX_UPDATE_MAX_LENGTH_COMPUTE = (int)(ARRAYS_SORT_CHECK * 2.2);
     private static final int _MAX_MAX_UPDATE_MAX_LENGTH = 120;
     @SuppressWarnings("unused") //One of these cases will always be marked as "dead"
@@ -45,19 +78,27 @@ public final class MSDStringSorter
     private static final int MIN_BLOCK_LEN_TO_MERGE = 4;
     
     //Blocks of size less than this we don't binary search over to find the guess for the end character. It is usually not worth it in these cases.
+    //For this value, HIGHER numbers mean MORE hesitant to trigger the optimization
+    //XXX This seems a tad high for the common case of only 2 or 3 characters, even though it may be good for another common case of 9 or 10 characters 
     private static final int MIN_BINARY_SEARCH = 28;
     
     //If this is false, then bucket sort will be used even if length < MAX_ARRAYS_INDEX_SORT but not close enough to the end to trigger a full sort
     //(Except for length < MAX_INSERTION_SORT, which will always fully sort)
     private static final boolean DO_NON_FULL_ARRAYS_SORT = true;
 
-    // For these two values, SMALLER numbers mean MORE hesistant to trigger the optimization
-    //Merging is a rather expensive operation, just to save a few method calls. Thus, be conservative with this number. 
+    // For these two values, SMALLER numbers mean MORE hesitant to trigger the optimization
+    //Merging is a rather expensive operation, just to save a few method calls. Thus, be conservative with this number.
+    //XXX This seems a tad low, but not by much
     private static final int MAX_REMAINING_BEFORE_MERGING_RANGES = 2;
     //Be conservative with this number, as not only will it trigger more aggressive merges, but also cause a non-insertion call to
     //arrays sort to look at all of the remaining characters, which could get expensive.
+    //XXX This seems a tad low, but not by much
     private static final int MAX_REMAINING_BEFORE_FULL_ARRAYS_SORT = 4;
     
+    //If there "seems" to be more characters than this value after the request max index to sort,
+    //then instead of trying to sort the "rest of" the string, the various, normal "total sorting" fallbacks
+    //(like insertion sort) will instead use a comparator that only using a substring.
+    //For this value, LOWER numbers mean MORE hesitant to trigger the optimization
     private static final int MAX_DIFF_BETWEEN_MAX_INDEX_GUESS_AND_REAL_MAX = 30;
     
     /*
@@ -142,6 +183,7 @@ public final class MSDStringSorter
      * @see CharSequence#charAt(int)
      */
     // FIXME #1 bottleneck when inlining does not occur
+    //Any JIT compiler worth its salt will be able to inline these charAt calls
     static final char charAt(String s, int index)
     {
         // Any self respecting JIT should be able to inline these two methods to their
@@ -149,6 +191,8 @@ public final class MSDStringSorter
         return index < s.length() ? s.charAt(index) : '\0';
     }
 
+    //These really should try to "chip in" data to build a shared prefix tree,
+    //which is a good way to speed up MSD string sort, and greatley speed up finding and skipping shared prefixes.
     static final int compareSubtrStartingAt(final String s1, final String s2, final int index)
     {
         final int len1 = s1.length();
@@ -165,6 +209,7 @@ public final class MSDStringSorter
         int k = index;
         while (k < lim)
         {
+            //Any JIT compiler worth its salt will be able to inline these charAt calls
             char c1 = s1.charAt(k);
             char c2 = s2.charAt(k);
             if (c1 != c2)
@@ -195,6 +240,7 @@ public final class MSDStringSorter
         int k = index;
         while (k < lim)
         {
+            //Any JIT compiler worth its salt will be able to inline these charAt calls
             char c1 = s1.charAt(k);
             char c2 = s2.charAt(k);
             if (c1 != c2)
@@ -209,10 +255,12 @@ public final class MSDStringSorter
 
     private final void doSort()
     {
-        while(!stack.isEmpty())
+        // TODO Parallel versions of this method, as this is trivially parallelizable (each part is independent of each other)
+        SortState current;
+        while((current = stack.pollFirst()) != null)
         {
             // "Recurse"
-            processPart(stack.pollFirst());
+            processPart(current);
         }
         return; // This redundant return is only so we can set a breakpoint here.
     }
@@ -263,16 +311,18 @@ public final class MSDStringSorter
                 assert buckets != FULLY_SORTED;
                 assert buckets.length != 1;
                 if(buckets == INDEX_SORTED_NO_BUCKETS)
-                    splitByCharGroups(start, end, index, maxIndex, curChar, currentState, needMaxIndexUpdate);
+                    splitByCharGroupsNoBucketIndexes(start, end, index, maxIndex, curChar, currentState, needMaxIndexUpdate);
                 else
-                    splitByCharGroups(start, end, index, maxIndex, buckets, currentState, needMaxIndexUpdate);
+                    splitByCharGroupsWithBucketIndexes(start, end, index, maxIndex, buckets, currentState, needMaxIndexUpdate);
             }
         }
     }
     
-    private void splitByCharGroups(final int start,
+    //This version is used when no character start indexes are available
+    private void splitByCharGroupsNoBucketIndexes(final int start,
         final int end, final int index, final int maxIndex, final char curChar, SortState currentState, final boolean updateMaxSize)
     {
+        //SortState is given not for the start, end, etc, but rather to update the max seen character, and for merging of ranges
         @SuppressWarnings("hiding") //We are trying to shift from a instance member lookup to a local variable lookup for performance 
         final String[] arr = this.arr;
         tempHolder = currentState;
@@ -284,6 +334,8 @@ public final class MSDStringSorter
         final int remainingCharsToProcess = maxIndex - index;
         final boolean shouldMerge = remainingCharsToProcess < MAX_REMAINING_BEFORE_MERGING_RANGES;
         final int maxMergedRangeSize = remainingCharsToProcess < MAX_REMAINING_BEFORE_FULL_ARRAYS_SORT ? MAX_ARRAYS_FULL_SORT : MAX_INSERTION_SORT;
+        //It's an odd use for this variable given its name, but the first use of this variable is whether to even try to do the binary search thing
+        //All subsequent uses of it follow usage implied by its name.
         boolean atStartOfBlock = end - start >= MIN_BINARY_SEARCH;
         char curChar2 = curChar;
         if(atStartOfBlock) //Skip the longer form of the loop if we are not binary searching
@@ -322,6 +374,7 @@ public final class MSDStringSorter
                 if(atStartOfBlock)
                 {
                     assert lastNewIndex == i;
+                    //Make sure to update the version of this outside the loop as well
                     //Before doing a binary search, check the next string (if any) so we don't waste time on blocks of size 1
                     if(i == end - 1 || (i < end - 1 && charAt(arr[i + 1], index) != curChar2))
                     {
@@ -370,9 +423,11 @@ public final class MSDStringSorter
         flushMergedIfNeeded();
     }
 
-    private void splitByCharGroups(final int start, final int end,
+    //This version is used when there is a character start index available
+    private void splitByCharGroupsWithBucketIndexes(final int start, final int end,
         final int index, final int maxIndex, final int[] buckets, SortState currentState, final boolean updateMaxSize)
     {
+        //SortState is given not for the start, end, etc, but rather to update the max seen character, and for merging of ranges
         @SuppressWarnings("hiding") //We are trying to shift from a instance member lookup to a local variable lookup for performance 
         final String[] arr = this.arr;
         tempHolder = currentState;
@@ -584,7 +639,6 @@ public final class MSDStringSorter
     private int[] doSortOnPart(final int fromIndex, final int toIndex,
         final int charIndex, final int maxIndex, final boolean tryTrackMaxIndex)
     {
-        //Note The SortState is not given for from, to, etc, but rather for updating the max seen character
         final int len = toIndex - fromIndex;
         maxIndexTempTrack = -1;
         switch(len) 
@@ -654,11 +708,12 @@ public final class MSDStringSorter
 
     // XXX #2 bottleneck
     // XXX Add some way to do this in the "middle" of a sort, so we don't loop through the array potentially twice
-    // Basically, this needs to be merged into the comparator function somehow.
+    // Basically, the comparators need to "chip in" some data to aid building a shared prefix tree,
+    // which can greatly speed up this method.  
     private static final int findSharedPrefixLen(final String[] arr, final int fromIndex, final int toIndex,
         final int charIndex, final int maxIndex)
     {
-        // It doesn't really matter which element we choose, it will give the same result
+        // It doesn't really matter which element we choose, it will give the same result, and the same average running time
         final String toTestAgainst = arr[fromIndex];
 
         final int len = Math.min(maxIndex, toTestAgainst.length());
@@ -746,6 +801,8 @@ public final class MSDStringSorter
         }
     }
     
+    //TODO add a sortFourItems method
+    
 
     private static final void
         insertionSort(final String[] arr, final int fromIndex, final int toIndex, final int charIndex, final int maxIndex)
@@ -805,11 +862,12 @@ public final class MSDStringSorter
     }
 
     //This is where the "magic" happens
-    //XXX O(3n + 2m), ugly :(
+    //XXX O(3n + 2c), ugly :(
+    //(c in this case is the number of distinct characters at the index in the given range;
+    // in the absolute worst case of c == n (no repeated characters), this would bring this up to O(3n + 2n) == O(5n))
     private int[] bucketSort(final int fromIndex, final int toIndex,
         final int charIndex, final boolean trackMaxLen)
     {
-        //Note The SortState is not given for from, to, etc, but rather for updating the max seen character 
         final int len = toIndex - fromIndex;
         @SuppressWarnings("hiding") //We are trying to shift from a instance member lookup to a local variable lookup for performance 
         final String[] arr = this.arr;
@@ -883,6 +941,9 @@ public final class MSDStringSorter
 
         int[] indexesOrig = indexes.clone();
 
+        // XXX This can possibly be done faster with some sort of detection for when a large block of substrings
+        // are already in the correct place given the current letter, and skipping those
+        
         // Now, copy over to the "working copy" array the strings into the right places
         for(int i = fromIndex; i < toIndex; ++i)
         {
@@ -894,7 +955,8 @@ public final class MSDStringSorter
 
         // XXX Find a way to do that thing where you swap the working copy and the real array each iteration
         // This is tricky though, as the number of iterations is not fixed, or even consistent among all
-        // subsets of the array to be sorted
+        // subsets of the array to be sorted, thus making it tricky to track which array has the final data for each segment
+        
         // Copy back over into the real array
         System.arraycopy(wc, fromIndex, arr, fromIndex, len);
         return indexesOrig;
@@ -992,9 +1054,9 @@ public final class MSDStringSorter
         int maxIndex;
         //If this extra field turns out to be too much overhead, then this should shift to a global sort state type thing
         
-        SortState(){} //Don't really care what the initial values are in this case
+        public SortState(){} //Don't really care what the initial values are in this case
 
-        SortState(final int start, final int end, final int index, final int maxIndex)
+        public SortState(final int start, final int end, final int index, final int maxIndex)
         {
             this.start = start;
             this.end = end;
@@ -1003,7 +1065,7 @@ public final class MSDStringSorter
         }
         
         @SuppressWarnings("unused")
-        SortState(final SortState otherState)
+        public SortState(final SortState otherState)
         {
             this.start = otherState.start;
             this.end = otherState.end;
@@ -1068,7 +1130,7 @@ public final class MSDStringSorter
          * The object will be untouched if the merged could not be done.
          * 
          * @param other the other state to merge with
-         * @return this (which is now merged with other), or {@literal null} if it cannot merge.
+         * @return this (which is now merged with other), or {@literal null} if it cannot merge (this instance will not be modified in this case).
          */
         public SortState mergeWith(final SortState other)
         {
@@ -1094,8 +1156,8 @@ public final class MSDStringSorter
     private static final int NUM_TIMES_RUN_SORT_RATIO = 10_000_000;
     private static final int MAX_NUM_TO_PRINT = 1000;
 
-    private static final int TIME_TO_PAUSE_AFTER_WARMUP = 20;
-    private static final int INDEX_TO_PART_SORT_TO = 40;
+    private static final int TIME_TO_PAUSE_AFTER_WARMUP = 40;
+    private static final int INDEX_TO_PART_SORT_TO = 10;
     
     private static final boolean ONLY_MSD_SORT = false;
     private static final boolean ONLY_ONE_RUN = false;
